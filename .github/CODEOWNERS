@@ -1,0 +1,9 @@
+# CODEOWNERS
+# 私有期只接受显式邀请的协作者；本文件用于 PR 自动 Review 请求
+
+# 默认所有改动都需 owner 审
+*       @Lyn-Huang
+
+# 文档变更只需 owner 审
+/docs/  @Lyn-Huang
+/RFC/   @Lyn-Huang

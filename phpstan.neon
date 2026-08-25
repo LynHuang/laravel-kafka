@@ -1,0 +1,12 @@
+parameters:
+    level: 6
+    paths:
+        - src
+    excludePaths:
+        - src/Exceptions
+    ignoreErrors:
+        # ext-rdkafka 反射由 PHPStan 推断
+        - '#Call to an undefined method RdKafka\\.*#'
+    treatPhpDocTypesAsCertain: false
+    checkMissingIterableValueType: false
+    reportUnmatchedIgnoredErrors: false

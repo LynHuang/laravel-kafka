@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/9.5/phpunit.xsd"
+    bootstrap="vendor/autoload.php"
+    backupGlobals="false"
+    beStrictAboutTestsThatDoNotTestAnything="false"
+    colors="true"
+    processIsolation="false"
+    stopOnFailure="false"
+    cacheResultFile=".phpunit.cache/test-results"
+    executionOrder="random"
+    resolveDependencies="true"
+>
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
+            <exclude>tests/Integration/Container/</exclude>
+        </testsuite>
+    </testsuites>
+    <coverage>
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+        <report>
+            <html outputDirectory="coverage"/>
+            <text outputFile="php://stdout" showUncoveredFiles="false"/>
+        </report>
+    </coverage>
+    <php>
+        <env name="APP_ENV" value="testing"/>
+        <env name="KAFKA_BROKERS" value="localhost:9092"/>
+        <env name="KAFKA_DEFAULT_TOPIC" value="laravel-jobs-test"/>
+        <env name="KAFKA_FAILED_DRIVER" value="hybrid"/>
+    </php>
+</phpunit>

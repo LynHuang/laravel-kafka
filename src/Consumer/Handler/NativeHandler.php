@@ -1,0 +1,301 @@
+<?php
+
+declare(strict_types=1);
+
+namespace LaravelKafka\Consumer\Handler;
+
+use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Contracts\Queue\Job as JobContract;
+use Illuminate\Contracts\Queue\Queue as QueueContract;
+use Illuminate\Queue\Worker;
+use Illuminate\Queue\WorkerOptions;
+use LaravelKafka\Events\MessageConsumed;
+use LaravelKafka\Events\MessageConsuming;
+use LaravelKafka\Events\MessageFailed;
+use LaravelKafka\Exceptions\KafkaException;
+use LaravelKafka\Producer\Message;
+use LaravelKafka\Producer\Serializer\PhpSerializer;
+use LaravelKafka\Producer\Serializer\Serializer;
+use LaravelKafka\Queue\KafkaJob;
+use LaravelKafka\Queue\KafkaQueue;
+use LaravelKafka\Queue\Failed\FailedJobHandlerInterface;
+use LaravelKafka\Support\Header;
+use Throwable;
+
+/**
+ * Laravel Job 原生 handler（v0.1 唯一的 Handler）。
+ *
+ * ## 流程
+ *
+ *  1. 从 Message 拿 headers（x-queue / x-attempt / x-original-topic 等）
+ *  2. 反序列化 payload（`PhpSerializer` / `JsonSerializer`）
+ *  3. 实例化 `KafkaJob`（伪 `RdKafka\Message` 包装）
+ *  4. 调 `Worker::process` 跑 Laravel Job
+ *  5. 根据 process 抛异常 / 业务结果返回 `HandlerResult`
+ *
+ * ## v0.2 事件
+ *
+ * 在 `Worker::process` 前后 dispatch 三个事件：
+ *  - `MessageConsuming`：处理前
+ *  - `MessageConsumed`：处理成功后
+ *  - `MessageFailed`：处理抛异常后（在写 DLQ 之前）
+ *
+ * ## 与 mateusjunges 的差异
+ *
+ * mateusjunges 让业务方传 `Handler` 接口（callable / 闭包）；
+ * 我们固定走 Laravel `Worker::process`，业务方继续用标准 Laravel Job。
+ */
+final class NativeHandler implements HandlerInterface
+{
+    /**
+     * Laravel 容器（用于解析其他依赖）。
+     *
+     * @var Container
+     */
+    private Container $container;
+
+    /**
+     * Laravel Worker（封装 Worker::process 调用）。
+     *
+     * @var Worker
+     */
+    private Worker $worker;
+
+    /**
+     * 失败处理器（v0.1 三模式：database / dlq / hybrid）。
+     *
+     * @var FailedJobHandlerInterface
+     */
+    private FailedJobHandlerInterface $failedHandler;
+
+    /**
+     * Payload 反序列化器（默认 PhpSerializer）。
+     *
+     * @var Serializer
+     */
+    private Serializer $serializer;
+
+    /**
+     * 构造时注入所有依赖。
+     *
+     * @param Container $container       Laravel 容器
+     * @param Worker $worker             Laravel Worker
+     * @param FailedJobHandlerInterface $failedHandler 失败处理器
+     * @param Serializer $serializer     payload 反序列化器
+     */
+    public function __construct(
+        Container $container,
+        Worker $worker,
+        FailedJobHandlerInterface $failedHandler,
+        Serializer $serializer
+    ) {
+        $this->container = $container;
+        $this->worker = $worker;
+        $this->failedHandler = $failedHandler;
+        $this->serializer = $serializer;
+    }
+
+    /**
+     * 处理一条 Kafka 消息（Handler 入口）。
+     *
+     * ## 流程
+     *
+     *  1. 从容器拿默认 `KafkaQueue`
+     *  2. 构造 `KafkaJob`（伪 `RdKafka\Message` 包装）
+     *  3. 从 config 读 max_attempts，构造 `WorkerOptions`
+     *  4. dispatch `MessageConsuming` 事件
+     *  5. `Worker::process($connectionName, $job, $options)` 跑 Laravel Job
+     *  6. 成功 → dispatch `MessageConsumed` + 返回 `HandlerResult::ack()`
+     *  7. 异常 → dispatch `MessageFailed` + 调 `onException()` 决定 ack/requeue/dlq
+     *
+     * @param Message $message 消费侧包装的消息（含 payload / headers / key）
+     * @return HandlerResult 三态之一：ack / requeue / dlq
+     * @throws KafkaException 默认连接不是 KafkaQueue 实例时
+     */
+    public function handle(Message $message): HandlerResult
+    {
+        $queue = $this->container->make('kafka.manager')->connection();
+        if (! $queue instanceof KafkaQueue) {
+            throw new KafkaException('Default queue is not a KafkaQueue instance.');
+        }
+
+        $job = $this->createJob($message, $queue);
+
+        $maxAttempts = (int) ($this->container->make('config')->get(
+            'kafka.connections.default.failed.hybrid.max_attempts',
+            3
+        ));
+
+        $options = new WorkerOptions(
+            'kafka-default', // name
+            '0', // backoff
+            128, // memory
+            60, // timeout
+            1, // sleep
+            $maxAttempts, // maxTries
+            false, // force
+            false, // stopWhenEmpty
+            0, // maxJobs
+            0, // maxTime
+            0 // rest
+        );
+
+        try {
+            $topic = $message->header(Header::ORIGINAL_TOPIC) ?? 'laravel-jobs';
+            $this->dispatchEvent(new MessageConsuming($topic, $message));
+
+            $this->worker->process(
+                $this->container->make('config')->get('queue.default', 'kafka'),
+                $job,
+                $options
+            );
+
+            $this->dispatchEvent(new MessageConsumed($topic, $message));
+            return HandlerResult::ack();
+        } catch (Throwable $e) {
+            $this->dispatchEvent(new MessageFailed(
+                $message->header(Header::ORIGINAL_TOPIC) ?? 'laravel-jobs',
+                $message,
+                $e
+            ));
+            return $this->onException($job, $message, $e);
+        }
+    }
+
+    /**
+     * 内部：dispatch Laravel 事件（容器未绑 Dispatcher 时静默跳过）。
+     *
+     * @param object $event Laravel 事件实例
+     * @return void
+     */
+    private function dispatchEvent(object $event): void
+    {
+        if (! $this->container->bound(Dispatcher::class)) {
+            return;
+        }
+        $this->container->make(Dispatcher::class)->dispatch($event);
+    }
+
+    /**
+     * 内部：构造 `KafkaJob`（v0.1 内部用）。
+     *
+     * 业务方**不直接调**。
+     *
+     * 构造一个伪 `RdKafka\Message` 实例喂给 `KafkaJob` 构造器。
+     * 注意：`RdKafka\Message` 的 `headers` 公共属性在某些版本是只读，
+     * librdkafka 升级时这里需要回归。
+     *
+     * @param Message $message 消费侧包装的消息
+     * @param KafkaQueue $queue 默认 KafkaQueue 实例
+     * @return KafkaJob
+     */
+    private function createJob(Message $message, KafkaQueue $queue): KafkaJob
+    {
+        $consumer = $this->container->make(\LaravelKafka\Consumer\Consumer::class);
+
+        $raw = $message->payload();
+        $headers = $message->headers();
+
+        // 构造一个伪 RdKafka\Message 给 KafkaJob
+        $rdMsg = new \RdKafka\Message();
+        $rdMsg->payload = $raw;
+        $rdMsg->headers = $headers;
+        $rdMsg->key = $message->key();
+        $rdMsg->partition = $message->partition() ?? 0;
+        $rdMsg->offset = (int) ($headers['x-offset'] ?? 0);
+        $rdMsg->topic_name = $message->header('x-original-topic') ?? 'laravel-jobs';
+
+        $queueName = (string) ($headers['x-queue'] ?? 'default');
+        $connectionName = (string) ($headers['x-connection'] ?? 'kafka');
+
+        return new KafkaJob(
+            $this->container,
+            $consumer,
+            $rdMsg,
+            $connectionName,
+            $queueName,
+        );
+    }
+
+    /**
+     * 内部：业务异常处理决策。
+     *
+     * ## 决策树
+     *
+     *  1. `failed.driver = 'database'` → 直接 ack（让 Laravel 默认 failed_jobs 流程处理）
+     *  2. `failed.driver = 'dlq' / 'hybrid'` → 调 failedHandler.handle() 写库 / DLQ
+     *  3. 致命异常 OR 达 max_attempts → 返回 dlq
+     *  4. 其他 → 返回 requeue（重试）
+     *
+     * @param KafkaJob $job 失败的 Job
+     * @param Message $message 失败的消息
+     * @param Throwable $e 业务异常
+     * @return HandlerResult
+     */
+    private function onException(KafkaJob $job, Message $message, Throwable $e): HandlerResult
+    {
+        // Laravel Worker 内部已经通过 JobFailed 事件把任务写进 failed_jobs（database 模式）
+        // 这里我们额外处理 dlq / hybrid 模式下的 DLQ 写入
+        $driver = (string) $this->container->make('config')->get(
+            'kafka.connections.default.failed.driver',
+            'hybrid'
+        );
+
+        if ($driver === 'database') {
+            // 纯 database 模式：让 Laravel 默认流程处理
+            return HandlerResult::ack();
+        }
+
+        // dlq / hybrid 模式：抛给 failedHandler
+        $this->failedHandler->handle(
+            $job,
+            $e,
+            new \LaravelKafka\Queue\Failed\FailedContext(
+                $message->payload(),
+                (array) $message->headers(),
+                $message->header('x-original-topic') ?? 'laravel-jobs',
+                $message->partition() ?? 0,
+                (int) ($message->header('x-attempt') ?? 0),
+            )
+        );
+
+        // 致命异常 → 直接 DLQ；其他 → 看是否到 maxAttempts
+        $isFatal = $this->isFatalException($e);
+        $attempt = (int) ($message->header('x-attempt') ?? 0) + 1;
+        $maxAttempts = (int) $this->container->make('config')->get(
+            'kafka.connections.default.failed.hybrid.max_attempts',
+            3
+        );
+
+        if ($isFatal || $attempt >= $maxAttempts) {
+            return HandlerResult::dlq($e);
+        }
+
+        return HandlerResult::requeue($e);
+    }
+
+    /**
+     * 内部：判断异常是否在 fatal 列表。
+     *
+     * fatal 列表从 config `kafka.connections.default.failed.hybrid.fatal_exceptions` 读。
+     * 业务方配置：例如 `[\LaravelKafka\Exceptions\SerializationException::class]`。
+     *
+     * @param Throwable $e 业务抛出的异常
+     * @return bool true = 致命（直接 DLQ，不再重试）
+     */
+    private function isFatalException(Throwable $e): bool
+    {
+        $fatal = (array) $this->container->make('config')->get(
+            'kafka.connections.default.failed.hybrid.fatal_exceptions',
+            []
+        );
+        foreach ($fatal as $class) {
+            if ($e instanceof $class) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

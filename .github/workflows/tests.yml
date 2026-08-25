@@ -1,0 +1,102 @@
+name: tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }} / Laravel ${{ matrix.laravel }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - php: '7.4'
+            laravel: '8.*'
+            testbench: '6.*'
+            composer: '2.2'
+          - php: '8.1'
+            laravel: '9.*'
+            testbench: '7.*'
+            composer: '2.5'
+          - php: '8.1'
+            laravel: '10.*'
+            testbench: '8.*'
+            composer: '2.5'
+          - php: '8.1'
+            laravel: '11.*'
+            testbench: '9.*'
+            composer: '2.5'
+          - php: '8.3'
+            laravel: '10.*'
+            testbench: '8.*'
+            composer: '2.7'
+          - php: '8.3'
+            laravel: '11.*'
+            testbench: '9.*'
+            composer: '2.7'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install librdkafka
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librdkafka-dev
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: rdkafka
+          tools: composer:${{ matrix.composer }}
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: |
+          composer require \
+            "illuminate/queue:${{ matrix.laravel }}" \
+            "illuminate/support:${{ matrix.laravel }}" \
+            "illuminate/console:${{ matrix.laravel }}" \
+            "illuminate/contracts:${{ matrix.laravel }}" \
+            "orchestra/testbench:${{ matrix.testbench }}" \
+            --no-update --no-interaction
+          composer update --prefer-dist --no-interaction
+
+      - name: Run tests
+        run: vendor/bin/phpunit --testsuite=Unit
+
+  integration:
+    name: Integration Tests (Testcontainers)
+    runs-on: ubuntu-latest
+    # 集成测试依赖 Kafka 集群，v0.1 暂不强制在 CI 跑
+    if: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install librdkafka
+        run: sudo apt-get install -y librdkafka-dev
+
+      - name: Setup PHP 8.1
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: rdkafka
+
+      - name: Start Kafka via Testcontainers
+        run: vendor/bin/testcontainers start kafka:3.6.1
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction
+
+      - name: Run integration tests
+        run: vendor/bin/phpunit --testsuite=Integration
+        env:
+          KAFKA_BROKERS: localhost:9092
