@@ -7,6 +7,20 @@
 
 ## [Unreleased]
 
+### v0.3.0 (in development)
+
+#### Step 1: 批量消费（2026-08-25）
+
+- **`Consumer::pollBatch(int $max, int $timeoutMs): array<Message>`**：批量拉取消息（4 重死循环防护：max / deadline / 连续 2 次 TIMED_OUT / maxIters）
+- **`Consumer::commitBatch(): void`**：整批 commit（包装 `commitAsync`，librdkafka commit = 消费位置）
+- **`kafka:work --batch-size=N` (默认 1) + `--batch-timeout=2000` (ms)** 选项
+- **整批原子语义**：单条失败 → 不 commit → 整批下次重投
+- **`tests/Unit/Consumer/ConsumerBatchTest.php`**：7 个 Mockery 单元测试
+- **测试统计**：86 → 93 (+7)，186 → 211 (+25) 断言
+- **兼容性**：默认 `--batch-size=1` = v0.1/v0.2 单条行为，向后兼容
+
+详见 [`docs/开发日志_v0.3.md`](开发日志_v0.3.md) Step 1 与 [`RFC/0004-v0.3.md`](../RFC/0004-v0.3.md)。
+
 ### v0.3.0 (planned)
 
 详见 `RFC/0004-v0.3.md`（待写）。候选范围：

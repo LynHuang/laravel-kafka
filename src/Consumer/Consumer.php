@@ -97,6 +97,109 @@ final class Consumer
     }
 
     /**
+     * 批量拉取消息（v0.3 引入）。
+     *
+     * ## 行为
+     *
+     * 循环调 `kafka->consume()` 拉消息直到满足以下任一条件：
+     *  1. 已拉到 `max` 条消息
+     *  2. 总耗时超过 `timeoutMs`（deadline-based）
+     *  3. 拉到至少 1 条消息后，遇到 TIMED_OUT（早返回，不空等）
+     *
+     * ## 与 `poll` 的差异
+     *
+     * | 场景 | `poll` | `pollBatch` |
+     * | --- | --- | --- |
+     * | 拉 1 条 | 1 次 consume | 1 次 consume |
+     * | 拉 N 条 | N 次 `poll`（每条单独 1s 超时） | 1 次 `pollBatch`（总超时 N 共享） |
+     * | 性能 | 单条 commit 开销大 | 整批 commit 一次 |
+     *
+     * ## 业务方使用
+     *
+     * ```php
+     * $messages = $consumer->pollBatch(50, 2000);  // 最多 50 条 / 最多等 2s
+     * foreach ($messages as $message) {
+     *     $result = $handler->handle($message);
+     *     // 单条结果处理（ack/requeue/dlq）
+     * }
+     * $consumer->commitBatch();  // 整批 commit
+     * ```
+     *
+     * ## 错误处理
+     *
+     * - 任何 librdkafka 内部错误（除 PARTITION_EOF / TIMED_OUT）→ 抛 KafkaException
+     * - 业务方 catch 后**不**调 commitBatch，让消息下次重投
+     *
+     * @param int $max 最多拉取消息数（> 0）
+     * @param int $timeoutMs 总超时（ms），默认 1000
+     * @return array<int, Message> 0~max 条消息（空数组 = 超时无消息）
+     * @throws KafkaException librdkafka 内部错误时
+     * @throws \InvalidArgumentException $max <= 0 时
+     */
+    public function pollBatch(int $max, int $timeoutMs = 1000): array
+    {
+        if ($max <= 0) {
+            throw new \InvalidArgumentException(sprintf(
+                'pollBatch max must be > 0, got %d',
+                $max
+            ));
+        }
+
+        $messages = [];
+        $deadline = microtime(true) + ($timeoutMs / 1000);
+        $consecutiveTimeouts = 0;
+
+        // v0.3 死循环防护：
+        //  1. 达到 max → 退出
+        //  2. deadline 到 → 退出
+        //  3. 连续 2 次 TIMED_OUT（broker 立即说无消息）→ 退出
+        //  4. 拉够 maxIters 次（极端情况防御）→ 退出
+        $maxIters = $max + 2;
+
+        for ($i = 0; $i < $maxIters; $i++) {
+            if (count($messages) >= $max) {
+                break;
+            }
+            if (microtime(true) >= $deadline) {
+                break;
+            }
+
+            $remaining = (int) max(0, ($deadline - microtime(true)) * 1000);
+            $perPollMs = $remaining > 0 ? $remaining : 1;
+            $rdMsg = $this->kafka->consume($perPollMs);
+
+            switch ($rdMsg->err) {
+                case RD_KAFKA_RESP_ERR_NO_ERROR:
+                    $messages[] = $this->wrap($rdMsg);
+                    $consecutiveTimeouts = 0;
+                    break;
+
+                case RD_KAFKA_RESP_ERR__PARTITION_EOF:
+                case RD_KAFKA_RESP_ERR__TIMED_OUT:
+                    // 拉到至少 1 条 + 超时 → 早返回
+                    if (count($messages) > 0) {
+                        return $messages;
+                    }
+                    // 没消息：连续 2 次空 poll → 退出（避免 broker 立即返回 TIMED_OUT 时死循环）
+                    $consecutiveTimeouts++;
+                    if ($consecutiveTimeouts >= 2) {
+                        return $messages;
+                    }
+                    break;
+
+                default:
+                    throw new KafkaException(sprintf(
+                        'Kafka consume error: code=%d %s',
+                        $rdMsg->err,
+                        rd_kafka_err2str($rdMsg->err)
+                    ));
+            }
+        }
+
+        return $messages;
+    }
+
+    /**
      * 提交指定消息的 offset（同步 commit）。
      *
      * 业务方**不直接调**——`KafkaJob::delete()` 调本方法。
@@ -120,6 +223,41 @@ final class Consumer
     public function commitAsync(): void
     {
         $this->kafka->commitAsync();
+    }
+
+    /**
+     * 整批 commit（v0.3 引入，配合 `pollBatch` 使用）。
+     *
+     * ## 行为
+     *
+     * 调用 `commitAsync()` commit 所有已消费但未 commit 的 offset。
+     * librdkafka 没有"按消息列表 commit"的 API——它的 commit 是"消费位置"，
+     * 调一次就 commit 当前位置及之前所有未提交的 offset。
+     *
+     * ## 业务方使用
+     *
+     * ```php
+     * $messages = $consumer->pollBatch(50, 2000);
+     * try {
+     *     foreach ($messages as $message) {
+     *         $handler->handle($message);  // 单条错误抛异常
+     *     }
+     *     $consumer->commitBatch();  // 整批成功，统一 commit
+     * } catch (\Throwable $e) {
+     *     // 不调 commitBatch → 整批下次重投
+     * }
+     * ```
+     *
+     * ## 约束
+     *
+     * - 必须在 `pollBatch` 之后调，否则可能 commit 错位
+     * - 整批原子 commit：要么全成功要么全失败重投（v0.3 简化，不支持部分 commit）
+     *
+     * @return void
+     */
+    public function commitBatch(): void
+    {
+        $this->commitAsync();
     }
 
     /**

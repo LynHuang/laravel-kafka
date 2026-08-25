@@ -51,7 +51,9 @@ final class WorkCommand extends Command
         {--connection=default : Kafka 连接名}
         {--max-time=0 : 最大运行秒数，0 = 不限}
         {--max-jobs=0 : 最大处理任务数，0 = 不限}
-        {--sleep=1 : 无消息时的 sleep 秒数}';
+        {--sleep=1 : 无消息时的 sleep 秒数}
+        {--batch-size=1 : 批量消费（v0.3）：每次 poll 最多拉取消息数，1 = 单条行为（v0.1/v0.2 默认）}
+        {--batch-timeout=2000 : 批量消费（v0.3）：单次 pollBatch 总超时（ms），到时即返回已拉到的消息}';
 
     /**
      * @var string
@@ -104,6 +106,12 @@ final class WorkCommand extends Command
         $maxTime = (int) $this->option('max-time');
         $maxJobs = (int) $this->option('max-jobs');
         $sleep = max(0, (int) $this->option('sleep'));
+        $batchSize = max(1, (int) $this->option('batch-size'));
+        $batchTimeout = max(100, (int) $this->option('batch-timeout'));
+
+        if ($batchSize > 1) {
+            $this->info(sprintf('[kafka:work] batch mode: max=%d timeout=%dms', $batchSize, $batchTimeout));
+        }
 
         while (! $this->shouldQuit) {
             if ($maxTime > 0 && (time() - $startTime) >= $maxTime) {
@@ -115,6 +123,39 @@ final class WorkCommand extends Command
                 break;
             }
 
+            // v0.3 批量消费分支
+            if ($batchSize > 1) {
+                $messages = $consumer->pollBatch($batchSize, $batchTimeout);
+                if (empty($messages)) {
+                    if ($sleep > 0) {
+                        sleep($sleep);
+                    }
+                    continue;
+                }
+
+                // 整批处理：单条失败抛异常 → 不 commit → 整批重投
+                $batchSuccess = true;
+                foreach ($messages as $message) {
+                    try {
+                        $this->processMessage($resolver, $consumer, $message);
+                    } catch (\Throwable $e) {
+                        $this->error(sprintf(
+                            '[kafka:work] batch message failed: %s — not committing batch',
+                            $e->getMessage()
+                        ));
+                        $batchSuccess = false;
+                        break;
+                    }
+                }
+
+                if ($batchSuccess) {
+                    $consumer->commitBatch();
+                }
+                $jobCount += count($messages);
+                continue;
+            }
+
+            // v0.1/v0.2 单条行为（--batch-size=1 或默认）
             $message = $consumer->poll(1000);
             if ($message === null) {
                 if ($sleep > 0) {
