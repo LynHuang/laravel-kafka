@@ -208,10 +208,6 @@ php artisan kafka:work --queue=laravel-jobs
 | --- | --- |
 | 📖 [**docs/使用文档/README.md**](docs/使用文档/README.md) | **详细功能 + 示例**（16 篇，按主题分块，推荐阅读入口） |
 | 📋 [docs/CHANGELOG.md](docs/CHANGELOG.md) | 完整版本变更日志 |
-| 📒 [docs/开发日志_v0.1.md](docs/开发日志_v0.1.md) | v0.1 单任务实施记录 |
-| 📒 [docs/开发日志_v0.2.md](docs/开发日志_v0.2.md) | v0.2 单任务实施记录 |
-| 📒 [docs/开发日志_v0.3.md](docs/开发日志_v0.3.md) | v0.3 5 步实施记录 |
-| 📒 [docs/开发日志_v0.4.md](docs/开发日志_v0.4.md) | v0.4 Horizon 兼容实施记录 |
 
 ---
 

@@ -41,3 +41,10 @@ desktop.ini
 
 archify-candidate.json
 laravel-kafka-*
+
+开发文档*.md
+kafka入门*.md
+LaravelKafka*.md
+/RFC/*.md
+/docs/开发日志*.md
+/diagrams/*
