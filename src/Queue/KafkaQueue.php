@@ -9,6 +9,7 @@ use Illuminate\Contracts\Queue\Queue as QueueContract;
 use Illuminate\Queue\Queue;
 use LaravelKafka\Config\KafkaConfig;
 use LaravelKafka\Consumer\Consumer;
+use LaravelKafka\Delay\DelayRouter;
 use LaravelKafka\Events\MessagePublished;
 use LaravelKafka\Events\MessagePublishing;
 use LaravelKafka\Exceptions\KafkaException;
@@ -284,11 +285,26 @@ final class KafkaQueue extends Queue implements QueueContract
     }
 
     /**
-     * 延迟消息 push（v0.1 占位 + v0.2 增强）。
+     * 延迟消息 push（v0.3 时间轮分层 topic）。
      *
-     * v0.1：通过 `options['delay_seconds']` 写到 `x-available-at` header，
-     *       消费端 NativeHandler 同步阻塞等待。
-     * v0.2+：走时间轮分层 topic（见 RFC 0003 v0.3 计划）。
+     * ## v0.1/v0.2 行为
+     *
+     * 写 `x-available-at` header，消费端 `NativeHandler` 同步阻塞等待。
+     * 问题：worker 被占死，多个延迟任务串行。
+     *
+     * ## v0.3 行为
+     *
+     * 走 `DelayRouter` 选最近一层的 tier topic：
+     *  - delay=3s   → 写 "delay-5s"   topic
+     *  - delay=15s  → 写 "delay-30s"  topic
+     *  - delay=400s → 写 "delay-1800s" topic
+     *
+     * `kafka:delay:work` worker 监听所有 tier topic，到期后 requeue 到主 topic。
+     *
+     * ## 兼容性
+     *
+     * API 不变（业务方 `Queue::later($seconds, $job)` 照常工作），内部实现切换。
+     * 如果 `DelayRouter` 不可用（容器没绑定）→ 回退到 v0.2 行为（header 同步阻塞）。
      *
      * @param int $delay 延迟秒数
      * @param mixed $job
@@ -298,10 +314,30 @@ final class KafkaQueue extends Queue implements QueueContract
      */
     public function later($delay, $job, $data = '', $queue = null)
     {
+        $delaySeconds = max(1, (int) $delay);
+
+        // 尝试用 v0.3 时间轮路由
+        if ($this->container !== null && $this->container->bound(DelayRouter::class)) {
+            $router = $this->container->make(DelayRouter::class);
+            $route = $router->route($delaySeconds);
+
+            $payload = $this->createPayload($job, $this->connectionName, $data, $queue);
+            return $this->pushRaw(
+                $payload,
+                $route['topic'],  // 写到 tier topic 而不是主 topic
+                [
+                    'delay_seconds' => $delaySeconds,
+                    'delay_tier' => $route['tier'],
+                    'x-original-queue' => (string) ($queue ?? $this->config->defaultTopic()),
+                ]
+            );
+        }
+
+        // 回退：v0.2 行为（header 同步阻塞）
         return $this->pushRaw(
             $this->createPayload($job, $this->connectionName, $data, $queue),
             $queue,
-            ['delay_seconds' => max(0, (int) $delay)]
+            ['delay_seconds' => $delaySeconds]
         );
     }
 
@@ -392,12 +428,24 @@ final class KafkaQueue extends Queue implements QueueContract
         $shortId = TraceContext::shortTraceId($traceparent) ?? bin2hex(random_bytes(8));
 
         $headers = [
+            // W3C Trace Context 完整头（00-<32hex trace-id>-<16hex parent-id>-<2hex flags>），
+            // 跨服务透传用，下游可继续派生子 span；无外部传入时由 TraceContext::next() 生成
             Header::TRACEPARENT => $traceparent,
+            // v0.1 兼容的短 trace id（16hex，取 traceparent 前 16 位），
+            // 供日志/监控快速关联，老版本消费端只认这个头
             Header::TRACE_ID => $shortId,
+            // Laravel 逻辑队列名（未指定时用配置的默认 topic），
+            // 消费端据此还原 Job 归属队列
             Header::QUEUE => (string) ($queue ?? $this->config->defaultTopic()),
+            // 当前 connection 名（如 default/reports），
+            // 多连接场景下区分消息来自哪个连接
             Header::CONNECTION => $this->connectionName,
+            // 入队时间戳（毫秒），用于消费端统计延迟/超时
             Header::ENQUEUED_AT => (string) $now,
+            // 重试计数（0 = 首次入队），消费端按 Laravel attempts 语义递增，用于 retry/失败判定
             Header::RETRY_COUNT => '0',
+            // 序列化器标识，声明 payload 的编码格式（当前固定 php serialize），
+            // 未来支持 JSON 等格式时消费端据此选择反序列化方式
             Header::SERIALIZER => 'php',
         ];
 

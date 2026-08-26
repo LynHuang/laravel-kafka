@@ -11,7 +11,10 @@ use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Failed\FailedJobProviderInterface;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
+use LaravelKafka\Console\DlqTailCommand;
+use LaravelKafka\Console\ReplayCommand;
 use LaravelKafka\Console\WorkCommand;
+use LaravelKafka\Delay\DelayRouter;
 use LaravelKafka\Manager\ConnectionFactory;
 use LaravelKafka\Manager\KafkaManager;
 use LaravelKafka\Queue\Failed\DatabaseFailedJobHandler;
@@ -87,6 +90,14 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
 
         // 容器别名，ServiceProvider 内部使用
         $this->app->alias(KafkaManager::class, 'kafka.manager');
+
+        // v0.3 Step 2: 时间轮分层路由（从 kafka.connections.default.delay 读配置）
+        $this->app->singleton(DelayRouter::class, function ($app) {
+            $delayConfig = (array) config('kafka.connections.default.delay', []);
+            $tiers = (array) ($delayConfig['tiers'] ?? [5, 30, 60, 300, 1800, 3600, 86400]);
+            $prefix = (string) ($delayConfig['topic_prefix'] ?? 'delay');
+            return new DelayRouter($tiers, $prefix);
+        });
 
         // queue.connector.kafka：移到 boot() 阶段（v0.1 老 bug 修复）
         // register() 阶段 Queue Facade 还没解析（QueueServiceProvider 还没 register 完）
@@ -211,6 +222,8 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 WorkCommand::class,
+                DlqTailCommand::class,  // v0.3 Step 3
+                ReplayCommand::class,   // v0.3 Step 4
             ]);
         }
     }

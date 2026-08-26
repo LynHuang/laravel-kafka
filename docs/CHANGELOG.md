@@ -7,28 +7,80 @@
 
 ## [Unreleased]
 
-### v0.3.0 (in development)
+### v0.4.0 (planned)
 
-#### Step 1: 批量消费（2026-08-25）
+详见 `RFC/0005-v0.4.md`（待写）。候选范围：
+- **Step 1 v0.3.1**：`kafka:delay:work` worker + `HybridFailedJobHandler` 集成 ExceptionClassRouter + AutoReplay 钩子
+- **Step 2**：事务 Producer（librdkafka transactional API）
+- **Step 3**：幂等性（`enable.idempotence=true` + 应用层 idempotency key）
+- **Step 4**：多 Consumer Group Fan-out
+- **Step 5**：Schema Registry / Avro 集成
+- **Step 6**：OpenTelemetry SDK 集成（替换手写 traceparent）
+- **Step 7**：Horizon / Octane 适配（v0.1 决议的 v0.4 重新评估）
 
-- **`Consumer::pollBatch(int $max, int $timeoutMs): array<Message>`**：批量拉取消息（4 重死循环防护：max / deadline / 连续 2 次 TIMED_OUT / maxIters）
-- **`Consumer::commitBatch(): void`**：整批 commit（包装 `commitAsync`，librdkafka commit = 消费位置）
+## [0.3.0] - 2026-08-25
+
+### Added
+
+#### Step 1: 批量消费
+
+- **`Consumer::pollBatch(int $max, int $timeoutMs): array<Message>`**：批量拉取（4 重死循环防护：max / deadline / 连续 2 次 TIMED_OUT / maxIters）
+- **`Consumer::commitBatch(): void`**：整批 commit（包装 `commitAsync`）
 - **`kafka:work --batch-size=N` (默认 1) + `--batch-timeout=2000` (ms)** 选项
 - **整批原子语义**：单条失败 → 不 commit → 整批下次重投
-- **`tests/Unit/Consumer/ConsumerBatchTest.php`**：7 个 Mockery 单元测试
-- **测试统计**：86 → 93 (+7)，186 → 211 (+25) 断言
-- **兼容性**：默认 `--batch-size=1` = v0.1/v0.2 单条行为，向后兼容
 
-详见 [`docs/开发日志_v0.3.md`](开发日志_v0.3.md) Step 1 与 [`RFC/0004-v0.3.md`](../RFC/0004-v0.3.md)。
+#### Step 2: 时间轮分层延迟消息
 
-### v0.3.0 (planned)
+- **`DelayRouter`**：选最近一层的 tier topic（5s/30s/60s/300s/1800s/3600s/86400s 共 7 个 tier）
+- **`KafkaQueue::later`** 改用 `DelayRouter` 路由到 tier topic（保留 v0.2 行为 fallback）
+- **`kafka.connections.{name}.delay.tiers[]`** + **`topic_prefix`** 配置
 
-详见 `RFC/0004-v0.3.md`（待写）。候选范围：
-- 时间轮分层延迟消息（替代 `x-available-at` 同步阻塞）
-- DLQ 高级（按 topic 分级 / 自动 replay / 限速）
-- 批量消费（一次 poll 多条 → 业务方 lambda）
-- 消息回放工具（replay CLI）
-- 性能基准（vs mateusjunges/laravel-kafka throughput 跑分）
+#### Step 3: DLQ 高级
+
+- **`ExceptionClassRouter`**：异常类名 → DLQ topic 路由（含 instanceof 继承匹配）
+- **`DlqRateLimiter`**：每分钟 N 条限速（滑动窗口）
+- **`kafka:dlq:tail <topic>`** 命令：实时打印 DLQ 消息（不 commit，独立 consumer group）
+
+#### Step 4: Replay CLI
+
+- **`TimeWindowParser`**：解析 `-1h` / `now` / `1700000000` / `2026-08-25 10:00:00` 等格式
+- **`Replayer::parseWindow()`**：窗口校验（from < to）
+- **`kafka:replay --topic=X --from=-1h --to=now --target-topic=Y --group=replay-runner`** 命令
+
+#### Step 5: 性能基准
+
+- **`benchmarks/produce-throughput.php`**：单 producer 极限发送（msg/s + MB/s）
+- **`benchmarks/consume-throughput.php`**：单 consumer 极限消费（msg/s + 端到端延迟 p50/p95/p99）
+- **`benchmarks/latency-p50-p99.php`**：produce → consume 端到端延迟分布
+- **`benchmarks/README.md`**：用法 + 启动 Kafka + 跑分说明
+
+#### 文档
+
+- **`RFC/0004-v0.3.md`**：v0.3 范围锁定（A 全面 5 项 / 方案 A 分层 topic / pollBatch 简单接口）
+- **`docs/开发日志_v0.3.md`**：5 步完整实施记录
+
+### Tests
+
+- **130 个测试 / 275 断言全部通过**
+- 44 个新测试（86 → 130）+ 89 个新断言（186 → 275）
+- 新增 `tests/Unit/Consumer/ConsumerBatchTest.php` / `Delay/DelayRouterTest.php` / `Queue/Failed/ExceptionClassRouterTest.php` / `Queue/Failed/DlqRateLimiterTest.php` / `Replay/TimeWindowParserTest.php` / `Replay/ReplayerTest.php`
+
+### Compatibility
+
+- ✅ **API 兼容**：`Queue::later($seconds, $job)` API 不变
+- ✅ **配置兼容**：`delay.tiers` / `delay.topic_prefix` 是新字段，缺失时用默认
+- ✅ **CLI 兼容**：`kafka:work` 默认 `--batch-size=1` = v0.1/v0.2 单条行为
+- ✅ **向后兼容**：`DelayRouter` 不可用时回退 v0.2 行为
+
+### Known Issues
+
+- `kafka:delay:work` worker 没写（业务方需自己监听 tier topic + sleep + requeue）→ v0.3.1
+- `HybridFailedJobHandler` / `DlqFailedJobHandler` 框架就位但**没集成** `ExceptionClassRouter` / `DlqRateLimiter`（v0.3 MVP）→ v0.3.1
+- `kafka:replay` v0.3 MVP 只做窗口校验，**实际 reproduce 留 v0.3.1**（需 `offsetsForTimes` + 遍历 partition）
+- 3 个 benchmark 脚本模板就绪，**未实跑**（等 Docker Kafka 起来后补 v0.3 实测基线）→ v0.3.1
+- **毒消息问题**：Step 1 单条失败 → 整批重投 → 同一毒消息无限重试 → v0.4 评估 dead-letter on N failures
+
+## [0.2.0] - 2026-08-25
 
 ## [0.2.0] - 2026-08-25
 
@@ -190,6 +242,7 @@
 - `DlqFailedJobHandler::truncate` 用 `strlen` 字节截断，对 UTF-8 多字节字符可能产生半个字
 - v0.1 全部源代码未在本地实际跑过（Windows 工作区无 PHP 8.1 + rdkafka），CI 验证是首次确认
 
-[Unreleased]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Lyn-Huang/laravel-kafka/releases/tag/v0.1.0
