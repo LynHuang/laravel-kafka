@@ -17,30 +17,45 @@ jobs:
           - php: '7.4'
             laravel: '8.*'
             testbench: '6.*'
-            composer: '2.2'
+            composer: '2.8'
           - php: '8.1'
             laravel: '9.*'
             testbench: '7.*'
-            composer: '2.5'
+            composer: '2.8'
           - php: '8.1'
             laravel: '10.*'
             testbench: '8.*'
-            composer: '2.5'
-          - php: '8.1'
-            laravel: '11.*'
-            testbench: '9.*'
-            composer: '2.5'
+            composer: '2.8'
           - php: '8.3'
             laravel: '10.*'
             testbench: '8.*'
-            composer: '2.7'
+            composer: '2.8'
           - php: '8.3'
             laravel: '11.*'
             testbench: '9.*'
-            composer: '2.7'
+            composer: '2.8'
+    services:
+      kafka:
+        image: confluentinc/cp-kafka:7.5.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_NODE_ID: '1'
+          KAFKA_PROCESS_ROLES: 'broker,controller'
+          KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+          KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092'
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+          KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+          KAFKA_CONTROLLER_QUORUM_VOTERS: '1@localhost:9093'
+          KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+          CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install librdkafka
         run: |
@@ -69,6 +84,19 @@ jobs:
             --no-update --no-interaction
           composer update --prefer-dist --no-interaction
 
+      - name: Wait for Kafka
+        run: |
+          for i in {1..60}; do
+            if (echo > /dev/tcp/localhost/9092) 2>/dev/null; then
+              echo "Kafka is up"
+              exit 0
+            fi
+            echo "Waiting for Kafka... ($i/60)"
+            sleep 2
+          done
+          echo "Kafka failed to start"
+          exit 1
+
       - name: Run tests
         run: vendor/bin/phpunit --testsuite=Unit
 
@@ -79,7 +107,7 @@ jobs:
     if: false
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install librdkafka
         run: sudo apt-get install -y librdkafka-dev

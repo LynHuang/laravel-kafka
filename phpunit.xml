@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <phpunit
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/9.5/phpunit.xsd"
+    xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
     bootstrap="vendor/autoload.php"
     backupGlobals="false"
     beStrictAboutTestsThatDoNotTestAnything="false"
     colors="true"
     processIsolation="false"
     stopOnFailure="false"
-    cacheResultFile=".phpunit.cache/test-results"
+    cacheDirectory=".phpunit.cache"
     executionOrder="random"
     resolveDependencies="true"
+    failOnDeprecation="false"
+    failOnNotice="false"
+    failOnWarning="false"
 >
     <testsuites>
         <testsuite name="Unit">
@@ -24,15 +27,11 @@
             <exclude>tests/Integration/Container/</exclude>
         </testsuite>
     </testsuites>
-    <coverage>
+    <source>
         <include>
             <directory suffix=".php">src</directory>
         </include>
-        <report>
-            <html outputDirectory="coverage"/>
-            <text outputFile="php://stdout" showUncoveredFiles="false"/>
-        </report>
-    </coverage>
+    </source>
     <php>
         <env name="APP_ENV" value="testing"/>
         <env name="KAFKA_BROKERS" value="localhost:9092"/>

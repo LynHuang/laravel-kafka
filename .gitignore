@@ -38,3 +38,6 @@ desktop.ini
 # Coverage reports
 /coverage/
 *.html
+
+archify-candidate.json
+laravel-kafka-*

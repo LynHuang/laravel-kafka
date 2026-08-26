@@ -29,8 +29,10 @@ return (new PhpCsFixer\Config())
         'php_unit_test_case_static_method_calls' => ['call_type' => 'self'],
         'no_unused_imports' => true,
         'single_quote' => true,
+        // v0.4.1 round 7: PHP 7.4 不支持函数调用/方法调用参数列表的 trailing comma
+        // (PHP 8.0+ 特性). 仅保留 arrays (PHP 7.4 已支持).
         'trailing_comma_in_multiline' => [
-            'elements' => ['arrays', 'arguments', 'parameters'],
+            'elements' => ['arrays'],
         ],
         'declare_strict_types' => true,
         'array_syntax' => ['syntax' => 'short'],
