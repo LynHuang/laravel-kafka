@@ -53,7 +53,10 @@ final class WorkCommand extends Command
         {--max-jobs=0 : 最大处理任务数，0 = 不限}
         {--sleep=1 : 无消息时的 sleep 秒数}
         {--batch-size=1 : 批量消费（v0.3）：每次 poll 最多拉取消息数，1 = 单条行为（v0.1/v0.2 默认）}
-        {--batch-timeout=2000 : 批量消费（v0.3）：单次 pollBatch 总超时（ms），到时即返回已拉到的消息}';
+        {--batch-timeout=2000 : 批量消费（v0.3）：单次 pollBatch 总超时（ms），到时即返回已拉到的消息}
+        {--horizon-metrics : v0.4: 启用 Horizon 兼容 metrics（业务方需装 Horizon + Redis，metrics 写到 horizon: 前缀的 key）}
+        {--horizon-prefix=horizon: : v0.4: Horizon Redis key 前缀}
+        {--horizon-redis=horizon : v0.4: Redis 连接名}';
 
     /**
      * @var string
@@ -83,6 +86,11 @@ final class WorkCommand extends Command
      */
     public function handle(HandlerResolver $resolver, ProducerFactory $producerFactory): int
     {
+        // v0.4: --horizon-metrics 启用时，绑定 HorizonMetricsRecorder
+        if ($this->option('horizon-metrics')) {
+            $this->bindHorizonMetricsRecorder();
+        }
+
         $this->installSignalHandlers();
 
         $config = $this->laravel->make('kafka.manager')->config(
@@ -283,5 +291,39 @@ final class WorkCommand extends Command
         };
         pcntl_signal(SIGTERM, $handler);
         pcntl_signal(SIGINT, $handler);
+    }
+
+    /**
+     * v0.4: 绑定 HorizonMetricsRecorder 到容器。
+     *
+     * 业务方需要：
+     *  - 装 Horizon / illuminate-redis
+     *  - 在 config/database.php 配 `horizon` connection
+     *
+     * 否则绑定失败 → 静默跳过（业务方没启用 horizon metrics）。
+     */
+    private function bindHorizonMetricsRecorder(): void
+    {
+        try {
+            if (! $this->laravel->bound('redis')) {
+                $this->warn('[kafka:work] --horizon-metrics 需要 redis 容器绑定（装 illuminate/redis 或 Horizon）');
+                return;
+            }
+
+            $prefix = (string) $this->option('horizon-prefix');
+            $connection = (string) $this->option('horizon-redis');
+
+            $this->laravel->singleton(\LaravelKafka\Horizon\HorizonMetricsRecorder::class, function ($app) use ($prefix, $connection) {
+                return new \LaravelKafka\Horizon\HorizonMetricsRecorder(
+                    $app->make('redis'),
+                    $connection,
+                    $prefix
+                );
+            });
+
+            $this->info(sprintf('[kafka:work] Horizon metrics enabled (connection=%s, prefix=%s)', $connection, $prefix));
+        } catch (\Throwable $e) {
+            $this->warn('[kafka:work] --horizon-metrics 启用失败: ' . $e->getMessage());
+        }
     }
 }

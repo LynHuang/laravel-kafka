@@ -153,6 +153,10 @@ final class NativeHandler implements HandlerInterface
             );
 
             $this->dispatchEvent(new MessageConsumed($topic, $message));
+
+            // v0.4: Horizon 兼容 — 记录 queue + job metrics
+            $this->recordHorizonMetrics($message, $startMs, true);
+
             return HandlerResult::ack();
         } catch (Throwable $e) {
             $this->dispatchEvent(new MessageFailed(
@@ -160,7 +164,40 @@ final class NativeHandler implements HandlerInterface
                 $message,
                 $e
             ));
+            $this->recordHorizonMetrics($message, $startMs, false);
             return $this->onException($job, $message, $e);
+        }
+    }
+
+    /**
+     * 内部：v0.4 记录 Horizon metrics（成功 + 失败都记录，保持 Horizon 与原版语义一致）。
+     *
+     * - 成功：throughput +1，runtime 加权平均
+     * - 失败：throughput 仍然 +1（业务方看到的是"任务处理尝试数"），runtime 也算上
+     *
+     * 如果容器没绑 `HorizonMetricsRecorder` → 静默跳过（业务方没启用 horizon metrics）。
+     *
+     * @param Message $message 消费侧包装的消息
+     * @param float $startMs 处理开始时间戳（ms）
+     * @param bool $success 是否成功
+     * @return void
+     */
+    private function recordHorizonMetrics(Message $message, float $startMs, bool $success): void
+    {
+        if (! $this->container->bound(HorizonMetricsRecorder::class)) {
+            return;
+        }
+        try {
+            /** @var HorizonMetricsRecorder $recorder */
+            $recorder = $this->container->make(HorizonMetricsRecorder::class);
+
+            $runtimeMs = (microtime(true) * 1000) - $startMs;
+            $topic = (string) ($message->header(Header::ORIGINAL_TOPIC) ?? 'laravel-jobs');
+
+            $recorder->incrementQueue($topic, $runtimeMs);
+        } catch (\Throwable $e) {
+            // 静默：metrics 失败不应影响业务处理
+            error_log('[laravel-kafka] Horizon metrics record failed: ' . $e->getMessage());
         }
     }
 

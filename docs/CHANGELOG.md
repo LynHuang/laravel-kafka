@@ -7,16 +7,56 @@
 
 ## [Unreleased]
 
-### v0.4.0 (planned)
+### v0.5.0 (planned)
 
-详见 `RFC/0005-v0.4.md`（待写）。候选范围：
+候选范围（v0.4 单任务完成 Horizon 兼容后，重新评估）：
 - **Step 1 v0.3.1**：`kafka:delay:work` worker + `HybridFailedJobHandler` 集成 ExceptionClassRouter + AutoReplay 钩子
 - **Step 2**：事务 Producer（librdkafka transactional API）
 - **Step 3**：幂等性（`enable.idempotence=true` + 应用层 idempotency key）
 - **Step 4**：多 Consumer Group Fan-out
 - **Step 5**：Schema Registry / Avro 集成
 - **Step 6**：OpenTelemetry SDK 集成（替换手写 traceparent）
-- **Step 7**：Horizon / Octane 适配（v0.1 决议的 v0.4 重新评估）
+- **Step 7**：Octane 适配（v0.1 决议的 v0.5 重新评估）
+
+## [0.4.0] - 2026-08-25
+
+### Added
+
+#### Step 1: Horizon 兼容（v0.4 单任务）
+
+- **`HorizonMetricsRecorder`**：调 Horizon 5.x `LuaScripts::updateMetrics` 同款 Lua 脚本写 Redis
+  - KEYS[1] = `queue:<name>` / `job:<className>`（Hash: throughput + runtime）
+  - KEYS[2] = `measured_queues` / `measured_jobs`（Set）
+  - ARGV[1] = runtime ms
+  - 逐字复制 Horizon 源码，**完全兼容** Horizon dashboard
+- **`HorizonSnapshot`**：定时快照（保留 24 份历史）
+- **`kafka:work --horizon-metrics`** 选项 + `--horizon-prefix` + `--horizon-redis` 三个配置
+- **`kafka:horizon:snapshot`** 命令（模板化，业务方通常用 Horizon 原生 `horizon:snapshot`）
+- **`NativeHandler` 集成**：成功 / 失败时都调 `recordHorizonMetrics`（throughput = 处理尝试数）
+- **Lua 脚本逐字复制**（含 horizon 5.x 关键逻辑：`hsetnx throughput 0` + `sadd` + 加权平均 runtime）
+
+#### 文档
+
+- **`docs/开发日志_v0.4.md`**：单任务完整记录
+
+### Tests
+
+- **137 个测试 / 286 断言全部通过**
+- 7 个新测试（130 → 137）+ 11 个新断言（275 → 286）
+- 新增 `tests/Unit/Horizon/HorizonMetricsRecorderTest.php`
+
+### Compatibility
+
+- ✅ **完全可选**：`--horizon-metrics` 不加 = 与 v0.3 完全一致
+- ✅ **不影响业务**：metrics 写失败 → 静默 error_log + 继续
+- ✅ **PHP 7.4 兼容**：`mixed` 类型 hint + 无命名参数 + 无属性提升
+- ✅ **不增依赖**：用 `illuminate/contracts`（已有），业务方按需装 Horizon / illuminate-redis
+
+### Known Issues
+
+- `kafka:horizon:snapshot` 命令只 print 参数（业务方应同时启用 Horizon 原生 `horizon:snapshot`）→ v0.4.1 补完整
+- job class metrics 暂未实现（NativeHandler 只调 `incrementQueue`）→ v0.4.1
+- throughput 永久累加（不调 `snapshot()` 清 0）→ Horizon "per minute" 数字会偏大
 
 ## [0.3.0] - 2026-08-25
 
@@ -242,7 +282,8 @@
 - `DlqFailedJobHandler::truncate` 用 `strlen` 字节截断，对 UTF-8 多字节字符可能产生半个字
 - v0.1 全部源代码未在本地实际跑过（Windows 工作区无 PHP 8.1 + rdkafka），CI 验证是首次确认
 
-[Unreleased]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Lyn-Huang/laravel-kafka/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Lyn-Huang/laravel-kafka/releases/tag/v0.1.0

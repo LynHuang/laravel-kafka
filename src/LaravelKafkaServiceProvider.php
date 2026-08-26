@@ -12,6 +12,7 @@ use Illuminate\Queue\Failed\FailedJobProviderInterface;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 use LaravelKafka\Console\DlqTailCommand;
+use LaravelKafka\Console\HorizonSnapshotCommand;
 use LaravelKafka\Console\ReplayCommand;
 use LaravelKafka\Console\WorkCommand;
 use LaravelKafka\Delay\DelayRouter;
@@ -222,8 +223,9 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 WorkCommand::class,
-                DlqTailCommand::class,  // v0.3 Step 3
-                ReplayCommand::class,   // v0.3 Step 4
+                DlqTailCommand::class,        // v0.3 Step 3
+                ReplayCommand::class,         // v0.3 Step 4
+                HorizonSnapshotCommand::class, // v0.4
             ]);
         }
     }
