@@ -292,17 +292,57 @@ final class KafkaConfig
     }
 
     /**
-     * 完整 producer 配置（通用 + producer 子配置）。
+     * Producer 字段名 → librdkafka key 翻译表。
+     *
+     * 业务方在 config/kafka.php 写业务方友好命名（`compression` / `batch_size` / `linger_ms`），
+     * 翻译成 librdkafka 实际接受的 key（`compression.type` / `batch.size` / `linger.ms`）。
+     *
+     * 命名来源：librdkafka [CONFIGURATION.md](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md)
+     *
+     * @var array<string,string>
+     */
+    private const PRODUCER_KEY_MAP = [
+        'compression'          => 'compression.type',
+        'batch_size'           => 'batch.size',
+        'linger_ms'            => 'linger.ms',
+        'request_timeout_ms'   => 'request.timeout.ms',
+        'message_timeout_ms'   => 'message.timeout.ms',
+        'enable_idempotence'   => 'enable.idempotence',
+        // 'acks' 已经是 librdkafka 原生名，无需翻译
+    ];
+
+    /**
+     * Consumer 字段名 → librdkafka key 翻译表。
+     *
+     * `group_id` / `auto_offset_reset` / `isolation_level` 已在
+     * {@see toConsumerRdKafkaConfig()} 顶部显式翻译，这里只列剩余的。
+     *
+     * @var array<string,string>
+     */
+    private const CONSUMER_KEY_MAP = [
+        'max_poll_interval_ms'  => 'max.poll.interval.ms',
+        'session_timeout_ms'    => 'session.timeout.ms',
+        'heartbeat_interval_ms' => 'heartbeat.interval.ms',
+        'fetch_min_bytes'       => 'fetch.min.bytes',
+        'fetch_max_bytes'       => 'fetch.max.bytes',
+        'enable_auto_commit'    => 'enable.auto.commit',
+    ];
+
+    /**
+     * 完整 producer 配置（通用 + producer 子配置，已翻译 key）。
      *
      * @return array<string,string>
      */
     public function toProducerRdKafkaConfig(): array
     {
-        return array_merge($this->toRdKafkaConfig(), $this->stringifyConfig($this->producer));
+        return array_merge(
+            $this->toRdKafkaConfig(),
+            $this->stringifyConfig($this->translateKeys($this->producer, self::PRODUCER_KEY_MAP))
+        );
     }
 
     /**
-     * 完整 consumer 配置（通用 + group.id / auto.commit=false + consumer 子配置）。
+     * 完整 consumer 配置（通用 + group.id / auto.commit=false + consumer 子配置，已翻译 key）。
      *
      * 关键：
      *  - `enable.auto.commit=false`（手动 commit，HandlerResult::ack 才提交）
@@ -321,11 +361,36 @@ final class KafkaConfig
             $conf['isolation.level'] = (string) $this->consumer['isolation_level'];
         }
 
-        // 排除已翻译的 key（避免把业务方友好的 'group_id' 透传给 librdkafka，它不认识这个 key）
+        // 排除已翻译的 key（group_id / auto_offset_reset / isolation_level）
         $excludedKeys = ['group_id', 'auto_offset_reset', 'isolation_level'];
         $remaining = array_diff_key($this->consumer, array_flip($excludedKeys));
 
-        return array_merge($conf, $this->stringifyConfig($remaining));
+        return array_merge(
+            $conf,
+            $this->stringifyConfig($this->translateKeys($remaining, self::CONSUMER_KEY_MAP))
+        );
+    }
+
+    /**
+     * 按 key 翻译表重命名数组 key（v0.4.1 hotfix: 之前 stringifyConfig 直接透传业务方友好 key 给 librdkafka，
+     * 触发 "No such configuration property" 错误）。
+     *
+     * - 在映射表里的 key → 重命名为 librdkafka 原生名
+     * - 不在映射表里的 key → 保留原名（业务方写了 librdkafka 原生名时直接通过）
+     * - 翻译后**不**做 exclude 过滤（不重复逻辑），由调用方负责 exclude
+     *
+     * @param array<string,mixed> $src
+     * @param array<string,string> $keyMap
+     * @return array<string,mixed>
+     */
+    private function translateKeys(array $src, array $keyMap): array
+    {
+        $out = [];
+        foreach ($src as $k => $v) {
+            $newKey = $keyMap[(string) $k] ?? (string) $k;
+            $out[$newKey] = $v;
+        }
+        return $out;
     }
 
     /**

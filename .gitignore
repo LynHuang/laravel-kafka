@@ -48,3 +48,4 @@ LaravelKafka*.md
 /RFC/*.md
 /docs/开发日志*.md
 /diagrams/*
+/laravel-test/

@@ -62,11 +62,39 @@ final class Producer
     private $lastDeliverySucceeded = false;
 
     /**
-     * @param RdKafkaProducer $kafka 底层 librdkafka 实例（由 {@see ProducerFactory::build()} 构造）
+     * 直接构造 (用于业务方).
+     *
+     * @param RdKafkaProducer $kafka 底层 librdkafka 实例
      */
     public function __construct(RdKafkaProducer $kafka)
     {
         $this->kafka = $kafka;
+    }
+
+    /**
+     * 用已配好 dr_msg_cb 的 Conf 构造（{@see ProducerFactory::build()} 用）。
+     *
+     * v0.4.1 hotfix: librdkafka 要求 `dr_msg_cb` 必须在 `new RdKafka\Producer($conf)` 之前
+     * 注册. 旧实现先 new 再 setDrMsgCb 导致 callback 不生效, 5s 后 produce timeout.
+     * 修法: 用 reference 暂存 Producer 实例, 先 setDrMsgCb 再 new.
+     *
+     * @param Conf $conf librdkafka 配置 (setDrMsgCb 必须在 new Producer 前调)
+     * @return self
+     */
+    public static function fromConf(Conf $conf): self
+    {
+        $instanceRef = null;
+        $conf->setDrMsgCb(function ($kafka, $message) use (&$instanceRef) {
+            if ($instanceRef !== null) {
+                $instanceRef->handleDeliveryReport($message);
+            }
+        });
+
+        $producer = new RdKafkaProducer($conf);
+        $instance = new self($producer);
+        $instanceRef = $instance;
+
+        return $instance;
     }
 
     /**
@@ -215,20 +243,4 @@ final class Producer
         return $out;
     }
 
-    /**
-     * 用 `Conf` 构造 Producer（{@see ProducerFactory} / 测试用）。
-     *
-     * 同时绑定 `setDrMsgCb` 回调到 `$this->handleDeliveryReport`。
-     *
-     * @param Conf $conf librdkafka 配置
-     * @return self
-     */
-    public static function fromConf(Conf $conf): self
-    {
-        $instance = new self(new RdKafkaProducer($conf));
-        $conf->setDrMsgCb(function ($kafka, $message) use ($instance) {
-            $instance->handleDeliveryReport($message);
-        });
-        return $instance;
-    }
 }

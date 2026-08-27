@@ -204,8 +204,10 @@ final class KafkaJob extends Job implements JobContract
      * @param Throwable|null $exception 业务异常
      * @return void
      */
-    public function fail($exception)
+    public function fail($exception = null)
     {
+        // v0.4.1 hotfix: 直接调父类 markAsFailed (Laravel 8.x 父类 markAsFailed 是 public)
+        // 之前用 reflection 调 private 父类 (v0.1 时代写法) 触发 "Access level must be public" 错
         $this->markAsFailed();
 
         if ($exception instanceof Throwable) {
@@ -226,20 +228,11 @@ final class KafkaJob extends Job implements JobContract
     }
 
     /**
-     * 内部：反射设置父类 `failed = true`（Laravel Job 内部状态）。
+     * 内部：标记 Job 失败。
      *
-     * v0.1 父类 `failed` 是 private，**必须**用 reflection。v0.2 评估用 `with` 子类直接暴露。
+     * v0.4.1 hotfix: 直接继承父类 `markAsFailed()` (Laravel 8.x 父类是 public, 不需要 reflection).
+     * 旧实现 v0.1 时代 reflection 调父类 private `markAsFailed` → PHP 8+ 严格模式 fatal.
      */
-    private function markAsFailed(): void
-    {
-        // 通过 reflection 设置父类的 failed 标志
-        $reflection = new \ReflectionClass(parent::class);
-        if ($reflection->hasProperty('failed')) {
-            $prop = $reflection->getProperty('failed');
-            $prop->setAccessible(true);
-            $prop->setValue($this, true);
-        }
-    }
 
     /**
      * 把 librdkafka headers 标准化成 `array<string,string>`。

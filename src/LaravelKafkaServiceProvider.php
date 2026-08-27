@@ -9,6 +9,7 @@ use Illuminate\Contracts\Queue\Factory as QueueFactoryContract;
 use Illuminate\Queue\Connectors\ConnectorInterface;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Failed\FailedJobProviderInterface;
+use Illuminate\Queue\Worker;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 use LaravelKafka\Console\DlqTailCommand;
@@ -111,11 +112,42 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // v0.4.1 hotfix: 给 Worker::class 加 alias 指向 'queue.worker' 单例
+        // (register() 阶段 QueueServiceProvider 还没跑, 'queue.worker' 未绑, 所以必须放 boot())
+        if ($this->app->bound('queue.worker') && ! $this->app->isShared(Worker::class)) {
+            $this->app->alias('queue.worker', Worker::class);
+        }
+
+        // v0.4.1 hotfix: FailedJobHandlerInterface 是接口, 容器无法自动解析.
+        // NativeHandler 构造声明 FailedJobHandlerInterface 时会触发 "is not instantiable".
+        // 绑到 FailedJobHandlerFactory::makeFor(default_config) 让容器按 default config 拿具体 handler.
+        $this->app->bind(\LaravelKafka\Queue\Failed\FailedJobHandlerInterface::class, function ($app) {
+            $config = $app['kafka.manager']->config();
+            $factory = $app->make(\LaravelKafka\Queue\Failed\FailedJobHandlerFactory::class);
+            return $factory->makeFor($config);
+        });
+
+        // v0.4.1 hotfix: Serializer 接口同理, 默认绑 PhpSerializer (与 config('kafka.connections.*.queue')
+        // push 用的 PHP serialize 字符串配套; v0.4.1 还不支持 JsonSerializer 作为 default, 见 docs/11-Serializer.md)
+        $this->app->bind(\LaravelKafka\Producer\Serializer\Serializer::class, function () {
+            return new \LaravelKafka\Producer\Serializer\PhpSerializer();
+        });
+
+        // v0.4.1 hotfix: Consumer 类构造声明 RdKafka\KafkaConsumer (容器无法自动解析)
+        // 绑到 ConsumerFactory::make() 让 NativeHandler::createJob() make(Consumer::class) 时拿到单例.
+        $this->app->bind(\LaravelKafka\Consumer\Consumer::class, function ($app) {
+            $config = $app['kafka.manager']->config();
+            return $app->make(\LaravelKafka\Consumer\ConsumerFactory::class)->make($config);
+        });
+
         // v0.1 老 bug 修复：Queue::extend 必须放在 boot() 阶段
         // register() 时 QueueServiceProvider 还没 register 完，'queue' 容器绑定不存在
         // 移到 boot()：所有 ServiceProvider 都 register 完了，'queue' 已就绪
-        Queue::extend('kafka', function ($app) {
-            return new KafkaConnector($app->make('kafka.manager'));
+        //
+        // v0.4.1 hotfix: Laravel 8.x 的 QueueManager::getConnector() 用 call_user_func($this->connectors[$driver])
+        // 0 参数调用闭包; Laravel 11+ 才传 1 个 $app 参数. 用 app() helper 兼容两个版本.
+        Queue::extend('kafka', function () {
+            return new KafkaConnector(app('kafka.manager'));
         });
 
         $this->syncFailedTableConfig();

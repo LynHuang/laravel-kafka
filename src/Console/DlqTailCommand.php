@@ -62,17 +62,20 @@ final class DlqTailCommand extends Command
         $config = $this->laravel->make('kafka.manager')->config($connection);
 
         // 独立 consumer group（避免与主消费者 / DLQ 消费者冲突）
+        // v0.4.1 hotfix: 不调 $conf->get('group.id')（部分 ext-rdkafka 版本 Conf::get() 不存在），
+        // 用本地变量 $groupId 保存, 然后用于打印日志.
+        $groupId = 'kafka-dlq-tail-' . gethostname() . '-' . getmypid();
         $conf = new Conf();
         $conf->set('client.id', 'laravel-kafka-dlq-tail');
         $conf->set('bootstrap.servers', $config->brokers());
-        $conf->set('group.id', 'kafka-dlq-tail-' . gethostname() . '-' . getmypid());
+        $conf->set('group.id', $groupId);
         $conf->set('enable.auto.commit', 'false');
         $conf->set('auto.offset.reset', 'earliest');
 
         $consumer = new KafkaConsumer($conf);
         $consumer->subscribe([$topic]);
 
-        $this->info(sprintf('[kafka:dlq:tail] tailing topic=%s group=%s', $topic, $conf->get('group.id')));
+        $this->info(sprintf('[kafka:dlq:tail] tailing topic=%s group=%s', $topic, $groupId));
 
         $count = 0;
         while (true) {
