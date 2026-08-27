@@ -5,7 +5,7 @@ Laravel 8 标准任务链（`Bus::chain` / `Job::withChain`）在本 Kafka 队�
 
 ---
 
-## 1. 业务方业务方业务方背景
+## 1. 业务方背景
 
 Laravel 8 任务链机制：
 - `Bus::chain([A, B, C])->dispatch()` — 静态传 Job 数组
@@ -33,7 +33,7 @@ probe31 e2e（业务方业务方业务方真实 Laravel 8 用法，6 条成功�
 
 ---
 
-## 3. 强顺序保证 — 业务方业务方业务场景注意
+## 3. 强顺序保证 — 业务场景注意
 
 | 部署模式 | chain 顺序保证 |
 | --- | --- |
@@ -42,7 +42,7 @@ probe31 e2e（业务方业务方业务方真实 Laravel 8 用法，6 条成功�
 | 1 个 `kafka:work` + 多 partition | ⚠️ 同 `key` 路由同 partition 才有序——但 chain step 没传 `key`，**会被轮询到任意 partition** |
 | 多 worker + 多 partition | ❌❌ 双破坏：worker 抢 + partition 抢 |
 
-### 业务方业务方业务场景建议
+### 业务场景建议
 
 | 业务方业务方需求 | 部署建议 |
 | --- | --- |

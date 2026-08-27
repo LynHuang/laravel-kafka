@@ -87,4 +87,48 @@ final class HorizonSnapshot
         // 3. 保留最新 N 份
         $conn->zremrangebyrank($snapshotKey, 0, -abs(1 + $this->trimSnapshots));
     }
+
+    /**
+     * 给单个 job 写一份快照 + 清当前计数器。
+     *
+     * v0.4.6 新增（修复 v0.4.0-0.4.5 错把 job 路径走 `snapshotQueue` 的 bug）：
+     * 之前 {@see HorizonSnapshotCommand} 处理 measured_jobs set 时也调 `snapshotQueue`,
+     * 导致 Redis key 写成 `<prefix>queue:<className>` + `<prefix>snapshot:queue:<className>`,
+     * 不是 Horizon 期望的 `<prefix>job:<className>` + `<prefix>snapshot:job:<className>`.
+     *
+     * ## 行为
+     *
+     *  1. `hmget(prefix + job:<job>, throughput, runtime)` → 读当前 metrics
+     *  2. `del(prefix + job:<job>)` → 清当前（下次 increment 重新累计）
+     *  3. `zadd(prefix + snapshot:job:<job>, time, json_data)` → 写历史
+     *  4. `zremrangebyrank(snapshot:job:<job>, 0, -N-1)` → 保留最新 N 份
+     *
+     * @param mixed $conn Redis connection
+     * @param string $prefix Horizon key 前缀
+     * @param string $jobClass job 完整类名（如 `App\Jobs\OrderJob`）
+     * @return void
+     */
+    public function snapshotJob($conn, string $prefix, string $jobClass): void
+    {
+        $hashKey = $prefix . 'job:' . $jobClass;
+        $snapshotKey = $prefix . 'snapshot:job:' . $jobClass;
+        $time = CarbonImmutable::now()->getTimestamp();
+
+        // 1. 读 + 删当前 metrics (race-tolerant: snapshot 跑在后台, 业务方短时双写可接受)
+        $values = $conn->hmget($hashKey, ['throughput', 'runtime']);
+        $conn->del($hashKey);
+
+        $throughput = is_array($values) ? ((int) ($values[0] ?? 0)) : 0;
+        $runtime = is_array($values) ? ((float) ($values[1] ?? 0)) : 0.0;
+
+        // 2. 写快照
+        $conn->zadd($snapshotKey, $time, json_encode([
+            'throughput' => $throughput,
+            'runtime' => $runtime,
+            'time' => $time,
+        ]));
+
+        // 3. 保留最新 N 份 (job 单独用 trimSnapshotsJob)
+        $conn->zremrangebyrank($snapshotKey, 0, -abs(1 + $this->trimSnapshotsJob));
+    }
 }

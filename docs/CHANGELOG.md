@@ -5,6 +5,76 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.6] - 2026-08-27
+
+### Fixed
+
+v0.4.5 release 后业务方跑 e2e probe32 (queue:work 真消费) + probe33 (Horizon snapshot 路径) 发现 2 个 P0 兼容 bug，v0.4.6 修。
+
+#### 1. `KafkaQueue::pop()` 真实实现（v0.1 占位返 null）
+
+**症状**：业务方跑 `php artisan queue:work --connection=kafka --once --stop-when-empty` 拿到 null 立即退出，**消费不到任何 Kafka 消息**。v0.4.5 probe29 #13 测试时 exit=0 但 output 是空（Worker `--stop-when-empty` 拿到 null 立即退出）。
+
+**根因**：`src/Queue/KafkaQueue.php::pop()` v0.1 留 `return null;` 占位（注释里说"真正 pop 在 `kafka:work` 长驻进程的 poll 循环里"），v0.4.5 还没做。
+
+**修法**（`src/Queue/KafkaQueue.php`）：实现 `pop()` 调 `$this->consumer->poll(1000)` 阻塞 1s 拿消息 + 包装 `KafkaJob` 给 Laravel Worker。Worker 调 `Job->fire()` 跑业务 → `Job->delete()` → `Consumer::ack()` 提交 offset。
+
+**性能 trade-off**（重要！）：真正的 Kafka 长轮询（`kafka:work`）是 `consume(1000)` 阻塞 + 消息 0~1ms 到达。在 Laravel Worker 包装下：
+- pop() 阻塞 1s 拿消息
+- Worker sleep 3s（`--sleep` 默认值）
+- 下一轮 pop() 阻塞 1s
+- **消息延迟 ≈ 1s + 3s + 1s = 5 秒**（vs `kafka:work` 真长轮询 1ms，5000 倍差距）
+
+业务方接受这个延迟退化才能用 `queue:work` 命令——**本包推荐仍用 `kafka:work`**（高性能 + 1ms 延迟）。
+
+**验证**（`laravel-test/probe32-queue-work.php` 9/9 全过）：
+- push 1 条 StandardOrderJob → `queue:work --once` 0.18s 真消费，handle log 含 `order_id: 32001`
+- queue:work 长跑 8s 消费 2 条 StandardOrderJob (32002, 32003)
+
+#### 2. `HorizonSnapshot::snapshotJob()` 新增（job 路径错走 queue 路径）
+
+**症状**：v0.4.0-0.4.5 `HorizonSnapshotCommand` 处理 `measured_jobs` set 时错调 `snapshotQueue`，导致 Redis key 写成 `<prefix>snapshot:queue:<className>`，**不是** Horizon 期望的 `<prefix>snapshot:job:<className>`。业务方 probe28 实测看到 `snapshot:queue:App\Jobs\TestOrderJob` 而不是 `snapshot:job:App\Jobs\TestOrderJob`。
+
+**根因**：`src/Console/HorizonSnapshotCommand.php:97` 处理 `$jobMembers` foreach 循环里**也调** `snapshotQueue($conn, $prefix, $job)`，但 Horizon 实际是 queue/job 两个独立 metric path。
+
+**修法**：
+- **新方法** `src/Horizon/HorizonSnapshot.php::snapshotJob($conn, $prefix, $jobClass)`：与 `snapshotQueue` 并行，写 `<prefix>job:<class>` hash + `<prefix>snapshot:job:<class>` sorted set + `del` hash + `zremrangebyrank` 保留 N 份
+- **改** `src/Console/HorizonSnapshotCommand.php`：`$jobMembers` 循环里改调 `$snapshot->snapshotJob(...)`（不是 `snapshotQueue`）
+- 向后兼容：`snapshotQueue()` 保留不变，queue 路径继续走
+
+**验证**（`laravel-test/probe33-horizon-snapshot-job.php` 9/9 全过）：
+- 直接调 `snapshotJob()` → `snapshot:job:<class>` zcard=1
+- 不再写错路径 `snapshot:queue:<class>`（zcard=0）
+- `kafka:horizon:snapshot` Command 跑后 job 路径 zcard=1，queue 路径 zcard=1
+
+### Verified
+
+| 路径 | 测试 | 结果 |
+| --- | --- | --- |
+| `queue:work --once --connection=kafka` 真消费 | probe32 #4 | ✅ exit=0, 0.18s, handle log OK |
+| `queue:work` 长跑 8s 消费 2 条 | probe32 #7-#9 | ✅ 32002 + 32003 都 handle |
+| `snapshotJob()` 写 snapshot:job: 路径 | probe33 #3 | ✅ zcard=1 |
+| `snapshotJob()` 不写错 snapshot:queue: 路径 | probe33 #4 | ✅ zcard=0 |
+| `snapshotQueue()` 向后兼容 | probe33 #7 | ✅ zcard=1 |
+| `kafka:horizon:snapshot` Command 端到端 | probe33 #8, #9 | ✅ job + queue 都写 |
+
+**9/9 + 9/9 全过**。
+
+### Known Limitations（v0.4.6 仍然 NOT 修的）
+
+| 事项 | 状态 | 详情 |
+| --- | --- | --- |
+| `queue:work` 消息延迟退化 | ⚠️ 已知限制 | 5s 延迟 vs `kafka:work` 1ms，业务方接受退化才能用 |
+| KafkaQueueFakeTest 期望错 | ⚠️ continue-on-error | v0.4.3 已知，CI 仍绿 |
+| phpstan 120 errors | ⚠️ continue-on-error | v0.4.1 已知，待 v0.4.7 清理 |
+
+### 文档更新
+
+- `docs/使用文档/17-Task-Chain.md`（v0.4.5 已加）— Laravel 8 chain API 误用陷阱
+- `docs/TODO.md` v0.4.5 → v0.4.6 待办已 #1 #3 完成项标注
+
+---
+
 ## [0.4.5] - 2026-08-27
 
 ### Fixed

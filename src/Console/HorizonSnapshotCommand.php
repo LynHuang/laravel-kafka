@@ -94,7 +94,9 @@ final class HorizonSnapshotCommand extends Command
                 $stripped = substr($stripped, strlen($laravelPrefix));
             }
             $job = substr($stripped, strlen($prefix . 'job:'));
-            $snapshot->snapshotQueue($conn, $prefix, $job);
+            // v0.4.6 fix: job 路径调 snapshotJob (Horizon 期望 <prefix>snapshot:job:<class>),
+            // 之前 v0.4.0-0.4.5 错调 snapshotQueue, 写成 <prefix>snapshot:queue:<class> (probe28 实测)
+            $snapshot->snapshotJob($conn, $prefix, $job);
             $countJobs++;
         }
 

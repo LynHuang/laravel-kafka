@@ -1,7 +1,7 @@
 # TODO / Technical Debt
 
 本包所有版本待办技术债的**集中清单**。每条记录**踩坑背景** + **修法方向** + **优先级**，
-未来版本（v0.4.6+）回到这包时按这个清单走。
+未来版本（v0.4.7+）回到这包时按这个清单走。
 
 来源：v0.4.0 release 后的多次业务方实测 + 后续维护中发现。
 
@@ -23,34 +23,35 @@
 
 ---
 
-## v0.4.5 → v0.4.6 待办
+## v0.4.6 已完成 (2026-08-27)
 
-### 1. `queue:work` 真消费（不是设计选择，是 v0.4.5 已知限制）
+v0.4.5 release 后业务方跑 e2e probe32 (`queue:work` 真消费) + probe33 (Horizon snapshot
+路径) 发现 2 个 P0 兼容 bug，v0.4.6 修：
 
-**踩坑**：业务方跑 `probe29` #13 `Artisan::call('queue:work', ['connection' => 'kafka', '--once' => true])`
-返回 exit=0 但 output 是空（Laravel Worker 调 `KafkaQueue::pop()` 拿 null，立即 `--stop-when-empty` 退出）。
-**`KafkaQueue::pop()` 永远返回 null**（v0.1 占位，注释里说"真正 pop 在 `kafka:work` 长驻进程的 poll 循环里"）。
+1. **KafkaQueue::pop() 真实实现** —— v0.1 占位返 null，业务方跑
+   `queue:work --once --connection=kafka` 拿到 null 立即退出，**消费不到任何消息**。
+   实现 1000ms 阻塞 poll + 包装 KafkaJob 给 Worker。
 
-**根因**：本包设计用 `kafka:work` 自定义长驻命令消费（librdkafka 同步阻塞 + NativeHandler::handle()），
-不走 Laravel 8 默认 Worker 的 `pop()` 循环。
+   **Trade-off**（业务方已知）：消息延迟从 1ms (`kafka:work` 真长轮询) 退化到 5s
+   (`queue:work` 默认 `--sleep=3s` + pop 1s + 下一轮 1s)。业务方接受此退化才能用
+   `queue:work` 命令——本包推荐仍用 `kafka:work`（高性能 + 1ms 延迟）。
 
-**业务方影响**：业务方**必须**用 `php artisan kafka:work` 而非 `php artisan queue:work`。
-`queue:work` 命令虽能 exit=0 但**消费不到任何 Kafka 消息**。
+   验证：`laravel-test/probe32-queue-work.php` 9/9 全过。
 
-**修法**（v0.4.6 评估工作量）：
-- **方案 A（推荐）**：在 `KafkaQueue::pop()` 里实现 100ms 同步阻塞 poll，包装 NativeHandler 调用，
-  让 `queue:work` 能用。但牺牲 Kafka 长轮询优势。
-- **方案 B（文档化）**：在 `docs/12-Worker-Commands.md` 加醒目警告："本包必须用 `kafka:work`
-  命令消费，**不要**用 Laravel 8 `queue:work`"。
-- **方案 C（混合）**：保留 `kafka:work` 作为 high-throughput 长驻命令，新增 `kafka:work:once`
-  同步阻塞命令，文档说明用 `kafka:work:once` 替代 `queue:work --once`。
+2. **HorizonSnapshot::snapshotJob() 新增** —— v0.4.0-0.4.5 Command 处理 `measured_jobs` 错调
+   `snapshotQueue` 写到 `snapshot:queue:<class>`，不是 Horizon 期望的 `snapshot:job:<class>`。
+   新增独立方法，Command 区分 queue/job 调不同方法。`snapshotQueue()` 行为不变（向后兼容）。
 
-**优先级**：中（业务方业务方业务场景下用 `kafka:work` 已 work，但业务方原始需求说"无缝切换"暗示
-`queue:work` 也应 work，v0.4.5 部分满足）。
+   验证：`laravel-test/probe33-horizon-snapshot-job.php` 9/9 全过。
+
+9/9 + 9/9 全过，0 regression（v0.4.3 已知 phpunit fail 仍 continue-on-error）。
+详见 `docs/CHANGELOG.md` v0.4.6 节。
 
 ---
 
-### 2. chain API 误用陷阱（中优先级，文档已加，源码层防御可选）
+## v0.4.6 → v0.4.7 待办
+
+### 1. chain API 误用陷阱（中优先级，文档已加，源码层防御可选）
 
 **踩坑**（probe31 实测发现）：业务方写 `$a->chain([B, C])->dispatch()` 推 orderId=0 到 queue。
 
@@ -67,28 +68,12 @@ offset=201 ($a->chain API):     orderId=0    ❌ 误用!
 
 **修法**：
 - ✅ **已完成（v0.4.5）**：写 `docs/使用文档/17-Task-Chain.md` 详细说明 + 3 种正确写法（`Job::withChain` / `Bus::chain` / `Bus::dispatch($a)` 手动）
-- 可选 v0.4.6：在本包 KafkaQueue::push() 里加 inspect + 警告（如果 $job->chained 非空但 $job->orderId=0 等异常模式）
-- 优先级：中（业务方业务方按文档写即可，源码层防御可选）
+- 可选 v0.4.7：在本包 `KafkaQueue::push()` 里加 inspect + 警告（如果 `$job->chained` 非空但 `$job->orderId=0` 等异常模式）
+- 优先级：中（业务方按文档写即可，源码层防御可选）
 
 ---
 
-### 3. HorizonSnapshot::snapshotJob() 缺失（中优先级）
-
-**踩坑**：`kafka:horizon:snapshot` 命令真调 `HorizonSnapshot::snapshotQueue()`，
-但 `snapshotQueue` 只识别 `queue:` 前缀，**job 路径**写到了 `snapshot:queue:<className>`
-而不是 `snapshot:job:<className>`。
-
-业务方实测：probe28 显示 `snapshot:queue:App\Jobs\TestOrderJob` 出现了。
-Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
-
-**修法**：
-- `HorizonSnapshot` 加新方法 `snapshotJob($conn, $prefix, $jobClass)`，写 `snapshot:job:<className>` + `del <prefix>job:<className>` hash
-- `HorizonSnapshotCommand::handle()` 区分 queue / job 调不同方法
-- 保持 `HorizonSnapshot::snapshotQueue` 现有行为不变（向后兼容）
-
----
-
-### 4. KafkaQueueFakeTest 期望错（低优先级，continue-on-error 已加）
+### 2. KafkaQueueFakeTest 期望错（低优先级，continue-on-error 已加）
 
 **踩坑**：`tests/Unit/Queue/KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer`
 假设 non-fake 模式下 `pushRaw` 必抛 Throwable，但 CI runner 有 `services.kafka` (KRaft 单 broker)
@@ -101,13 +86,13 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 
 ---
 
-### 5. phpstan 历史 120 errors（低优先级，continue-on-error 已加）
+### 3. phpstan 历史 120 errors（低优先级，continue-on-error 已加）
 
 **踩坑**：v0.4.1 时 PHP-CS-Fixer 3.95 在 PHP 8.1 跑 + phpstan level 6 报 120 errors
 （`KafkaConfig` 等类的 dynamic property / never-read / visibility / `createPayload` 参数）。
 
 **现状**：`.github/workflows/tests.yml` + `.github/workflows/linter.yml` 都有
-`continue-on-error: true`，业务方技术债**注释里写明 v0.4.6 清理**。
+`continue-on-error: true`，业务方技术债**注释里写明 v0.4.7 清理**。
 
 **修法**：
 - 修业务代码 120 errors（`KafkaConfig` dynamic property 加 `#[\AllowDynamicProperties]`
@@ -117,7 +102,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 
 ---
 
-### 6. librdkafka 1.6.2 commit 60s timeout（环境兼容，非代码 bug）
+### 4. librdkafka 1.6.2 commit 60s timeout（环境兼容，非代码 bug）
 
 **踩坑**：`kafka:work --max-time=X` 触发强退时，librdkafka 1.6.2 + Windows + 单 broker
 + IPv4/IPv6 切换下，group commit 请求等 60s 才超时。
@@ -132,7 +117,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 
 ## 长期 backlog（v0.4.7+ 考虑）
 
-### 6. JsonSerializer（业务方没测，独立功能）
+### 5. JsonSerializer（业务方没测，独立功能）
 
 **踩坑**：v0.4 文档说支持 `JsonSerializer`，但 v0.4.3 hotfix 默认绑 `PhpSerializer`
 （PHP serialize 格式，与 Laravel Queue 的 `Queue::push` 默认输出兼容）。
@@ -145,7 +130,7 @@ JsonSerializer 路径在测试套件里没覆盖。
 
 ---
 
-### 7. 单元测试用 Testbench + 真 Redis（integration test 改造）
+### 6. 单元测试用 Testbench + 真 Redis（integration test 改造）
 
 v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis**。当前用
 `Redis::connection('default')` 包装层 + 业务方本机 Redis 6379 跑通，**但 CI runner 没 Redis**。
@@ -159,7 +144,7 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 
 ---
 
-### 8. 业务方业务方 laravel-test 项目的清理
+### 7. 业务方业务方 laravel-test 项目的清理
 
 业务方测试项目 `laravel-test/` 在 `vendor/lyn-huang/laravel-kafka/` 是 git archive 快照
 + 手动 Copy-Item 同步 hotfix。**业务方业务环境** `composer require` 装会丢这些 hotfix。
@@ -173,9 +158,8 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 
 ## 跟踪规则
 
-1. v0.4.5 → v0.4.6：处理 #1（queue:work 兼容）、#2（chain API 防御，可选）、#3（snapshotJob）、#4（KafkaQueueFakeTest）、#5（phpstan）
-2. v0.4.6 → v0.4.7：处理 #6（librdkafka 升级）、#7（JsonSerializer）、#8（CI Redis service）
-3. #9（laravel-test 清理）是文档性，**不**算技术债，业务方按需处理
+1. v0.4.6 → v0.4.7：处理 #1（chain API 防御，可选）、#2（KafkaQueueFakeTest）、#3（phpstan）
+2. v0.4.7 → v0.5.0：处理 #4（librdkafka 升级）、#5（JsonSerializer）、#6（CI Redis service）
+3. #7（laravel-test 清理）是文档性，**不**算技术债，业务方按需处理
 4. 每次修完从本文件删对应条目，并在 `docs/CHANGELOG.md` 新版本里写 "Fixed" 链接回本文件
-5. CI 跑 v0.4.6 时本文件应该有 0 条 high 优先级条目
-
+5. CI 跑 v0.4.7 时本文件应该有 0 条 high 优先级条目

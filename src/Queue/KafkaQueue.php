@@ -373,19 +373,70 @@ final class KafkaQueue extends Queue implements QueueContract
     }
 
     /**
-     * 同步 pop（v0.1 占位：永远返回 null）。
+     * 同步 pop（v0.4.6 实现：1000ms 阻塞 poll，包装 NativeHandler::createJob() 风格）。
      *
-     * Kafka 模型与 Laravel 同步 pop 循环不兼容——真正的 pop 在
-     * `kafka:work` 长驻进程的 poll 循环里。
+     * ## v0.4.4 之前行为
      *
-     * 返回 null 让 Laravel 默认 worker 拿到 null 直接退出（不消费任何 Kafka 消息）。
+     * 永远返回 null（v0.1 占位），致 `php artisan queue:work --connection=kafka` 拿到 null
+     * 立即 `--stop-when-empty` 退出，**消费不到任何 Kafka 消息**。
      *
-     * @param string|null $queue
-     * @return null 永远返回 null
+     * ## v0.4.6 行为
+     *
+     * 通过 `Consumer::poll(1000)` 阻塞 1 秒拉 1 条消息，包装成 `KafkaJob` 给 Laravel Worker。
+     * Worker 调 `Job->fire()` 跑业务 → `Job->delete()` → Consumer::ack() 提交 offset。
+     *
+     * ## 性能 trade-off
+     *
+     * 真正的 Kafka 长轮询（`kafka:work` 进程）是 `consume(1000)` 阻塞 + 消息 0~1ms 到达。
+     * 在 Laravel Worker 包装下：
+     *  - pop() 阻塞 1s 拿消息
+     *  - Worker sleep 3s（`--sleep` 默认值）
+     *  - 下一轮 pop() 阻塞 1s
+     *  - **消息延迟 ≈ 1000ms + 3000ms + 1000ms = 5 秒**
+     *
+     * vs `kafka:work` 真长轮询 **≈ 1 ms**（5000 倍差距）。
+     *
+     * **业务方接受这个退化**才能用 `queue:work` 命令——本包推荐仍用 `kafka:work`。
+     *
+     * ## 异常处理
+     *
+     * - `Consumer::poll()` 抛 librdkafka 错误（rebalance / GroupCoordinator timeout）→ 返 null
+     * - `poll()` 超时未拿到消息 → 返 null
+     * - 拿到消息 → 包装 `KafkaJob` 给 Worker
+     *
+     * @param string|null $queue 队列名（null = 用 `x-queue` header 或 defaultTopic）
+     * @return KafkaJob|null 消息包装的 Job 或 null
      */
     public function pop($queue = null)
     {
-        return null;
+        try {
+            $msg = $this->consumer->poll(1000);
+        } catch (\Throwable $e) {
+            // 容忍 rebalance / GroupCoordinator timeout 等瞬时错误
+            return null;
+        }
+        if ($msg === null) {
+            return null;
+        }
+
+        // 构造伪 RdKafka\Message 给 KafkaJob（与 NativeHandler::createJob() 风格一致）
+        $rdMsg = new \RdKafka\Message();
+        $rdMsg->payload = $msg->payload();
+        $rdMsg->headers = $msg->headers();
+        $rdMsg->key = $msg->key();
+        $rdMsg->partition = $msg->partition() ?? 0;
+        $rdMsg->offset = (int) ($msg->header('x-original-offset') ?? 0);
+        $rdMsg->topic_name = (string) ($msg->header('x-original-topic') ?? $this->config->defaultTopic());
+
+        $queueName = (string) ($queue ?? ($msg->header('x-queue') ?? $this->config->defaultTopic()));
+
+        return new \LaravelKafka\Queue\KafkaJob(
+            $this->container,
+            $this->consumer,
+            $rdMsg,
+            $this->connectionName,
+            $queueName
+        );
     }
 
     /**
