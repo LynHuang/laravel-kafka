@@ -529,9 +529,10 @@ final class KafkaQueue extends Queue implements QueueContract
             Header::ENQUEUED_AT => (string) $now,
             // 重试计数（0 = 首次入队），消费端按 Laravel attempts 语义递增，用于 retry/失败判定
             Header::RETRY_COUNT => '0',
-            // 序列化器标识，声明 payload 的编码格式（当前固定 php serialize），
-            // 未来支持 JSON 等格式时消费端据此选择反序列化方式
-            Header::SERIALIZER => 'php',
+            // 序列化器标识，声明 payload 的编码格式（v0.5.0 从配置读，替代硬编码 'php'）。
+            // 注意：Laravel Job payload 由 createPayload 决定（外层 JSON + data.command PHP serialize），
+            // 此 header 主要给裸事件（非 Laravel Job）消费端选反序列化器用。
+            Header::SERIALIZER => $this->config->serializer(),
         ];
 
         if (isset($options['delay_seconds']) && (int) $options['delay_seconds'] > 0) {

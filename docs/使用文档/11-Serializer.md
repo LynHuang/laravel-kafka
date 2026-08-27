@@ -67,6 +67,34 @@ $serializer->name();  // 'json'
 
 > **v0.5.0 接入**：`NativeHandler` 真正支持按 `x-serializer` header 选反序列化器。
 > 裸事件（非 Laravel Job payload）→ `JsonSerializer::decode` → dispatch `PayloadReceived` 事件。
+> **v0.5.1 配置化**：默认 Serializer 通过 `config/kafka.php` 配置。
+
+### 3.0 配置默认 Serializer（v0.5.1）
+
+`config/kafka.php`：
+
+```php
+'connections' => [
+    'default' => [
+        // ... 其他配置
+        'serializer' => env('KAFKA_SERIALIZER', 'php'),  // php | json
+    ],
+],
+```
+
+或 `.env`：
+
+```dotenv
+KAFKA_SERIALIZER=json
+```
+
+**作用**：
+- **push 侧**：`KafkaQueue::buildMessage` 的 `x-serializer` header 用配置值（替代 v0.4.1 硬编码 `'php'`）
+- **consume 侧**：`NativeHandler` 裸事件无 `x-serializer` header 时用配置默认解码
+
+**优先级**（consume 侧）：消息 `x-serializer` header（显式）> 配置默认 > PhpSerializer fallback。
+
+
 
 业务方用 `JsonSerializer` 发业务事件（跨语言消费场景），绕过 `Queue::push`，直接用低层 `Producer` API：
 

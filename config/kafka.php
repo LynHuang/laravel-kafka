@@ -60,6 +60,25 @@ return [
 
             /*
             |----------------------------------------------------------------------
+            | 默认序列化器（v0.5.0 配置化）
+            |----------------------------------------------------------------------
+            |
+            | php:   PhpSerializer —— Laravel Job 兼容（默认）
+            | json:  JsonSerializer —— 裸事件（非 Laravel Job）跨语言消费场景
+            |
+            | 作用：
+            |  - push 侧：`x-serializer` header 默认值（KafkaQueue::buildMessage）
+            |  - consume 侧：裸事件无 `x-serializer` header 时的默认（NativeHandler）
+            |
+            | 注意：Laravel Job payload 由 `Queue::createPayload` 决定（外层 JSON +
+            | data.command PHP serialize），本配置只影响裸事件路径的默认声明/选择。
+            |
+            */
+
+            'serializer' => env('KAFKA_SERIALIZER', 'php'),
+
+            /*
+            |----------------------------------------------------------------------
             | 生产者配置
             |----------------------------------------------------------------------
             |

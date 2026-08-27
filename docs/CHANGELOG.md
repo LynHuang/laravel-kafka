@@ -5,6 +5,62 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.1] - 2026-08-27
+
+### Added
+
+**Serializer 默认值配置化**（业务方反馈：用哪个 Serializer 应通过配置改，而非硬编码）。
+
+#### 1. `config/kafka.php` 加 `serializer` 配置项
+
+```php
+'connections' => [
+    'default' => [
+        // ...
+        'serializer' => env('KAFKA_SERIALIZER', 'php'),  // php | json
+    ],
+],
+```
+
+#### 2. `KafkaConfig` 加 serializer 字段 + getter
+
+- 新 property `private string $serializer;`（默认 `'php'`）
+- 构造器加第 14 参 `string $serializer = 'php'`（向后兼容）
+- `fromArray` 解析 `$config['serializer'] ?? 'php'`
+- 新 getter `serializer(): string`
+
+#### 3. push 侧 `KafkaQueue::buildMessage` 用配置值
+
+`Header::SERIALIZER => $this->config->serializer()` 替代 v0.4.1 硬编码 `'php'`。
+
+#### 4. consume 侧 `NativeHandler::resolveSerializer` 配置默认
+
+裸事件无 `x-serializer` header 时，从 `config('kafka.connections.default.serializer', 'php')` 读默认。
+
+**优先级**（consume 侧）：消息 `x-serializer` header（显式）> 配置默认 > PhpSerializer fallback。
+
+### Fixed
+
+`NativeHandler::handleRawPayload` 裸事件 header 默认值修复：
+之前 `$message->header(Header::SERIALIZER, 'php')` 写死默认 'php'，导致配置 json 时
+裸事件无 header 仍用 PhpSerializer decode（probe37 实测报 `PhpSerializer decode failed:
+unserialize() Error at offset 0`）。改传 null 让 `resolveSerializer` 读配置默认。
+
+### Verified
+
+| 项 | 结果 |
+| --- | --- |
+| probe37 配置驱动 | ✅ 8/8：配置 json → KafkaConfig::serializer()=json → 裸事件无 header 用 json decode → PayloadReceived → ack |
+| probe37 push 侧 header | ✅ 配置 json 时 push Laravel Job x-serializer=json（buildMessage 用 config）|
+| probe36 裸事件回归 | ✅ 7/7（带 x-serializer header 场景仍 work）|
+| phpunit 137/287 | ✅ 0 failures |
+| phpstan level 6 | ✅ 0 errors |
+| cs-fixer | ✅ 0 diff |
+
+**0 regression**。
+
+---
+
 ## [0.5.0] - 2026-08-27
 
 ### Added

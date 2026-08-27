@@ -157,6 +157,16 @@ final class KafkaConfig
     private array $replay;
 
     /**
+     * 默认序列化器标识（'php' / 'json'，v0.5.0 配置化）。
+     *
+     * - push 侧：`buildMessage` 的 `x-serializer` header 用此值（替代硬编码 'php'）
+     * - consume 侧：裸事件（非 Laravel Job）无 `x-serializer` header 时用此值
+     *
+     * 业务方在 `config/kafka.php` 配 `serializer => env('KAFKA_SERIALIZER', 'php')`。
+     */
+    private string $serializer;
+
+    /**
      * 从业务方 array 配置构造（ServiceProvider boot 时调）。
      *
      * 字段映射：
@@ -187,6 +197,7 @@ final class KafkaConfig
             (array) ($config['failed'] ?? []),
             (array) ($config['delay'] ?? []),
             (array) ($config['replay'] ?? []),
+            (string) ($config['serializer'] ?? 'php'),
         );
     }
 
@@ -204,6 +215,7 @@ final class KafkaConfig
      * @param array<string,mixed>   $failed           失败处理配置（driver / database / dlq / hybrid）
      * @param array<string,mixed>   $delay            延迟消息配置（v0.3 时间轮预留）
      * @param array<string,mixed>   $replay           回溯配置（v0.3 replay 预留）
+     * @param string                $serializer       默认序列化器（'php' / 'json'，v0.5.0 配置化）
      * @throws KafkaException protocol 非法 / brokers 空 / defaultTopic 空
      */
     public function __construct(
@@ -219,7 +231,8 @@ final class KafkaConfig
         array $consumer,
         array $failed,
         array $delay,
-        array $replay
+        array $replay,
+        string $serializer = 'php'
     ) {
         $this->name = $name;
         $this->brokers = $brokers;
@@ -234,6 +247,7 @@ final class KafkaConfig
         $this->failed = $failed;
         $this->delay = $delay;
         $this->replay = $replay;
+        $this->serializer = $serializer;
 
         $this->validateProtocol($protocol);
         if ($brokers === '') {
@@ -399,6 +413,19 @@ final class KafkaConfig
     public function replay(): array
     {
         return $this->replay;
+    }
+
+    /**
+     * 默认序列化器标识（'php' / 'json'，v0.5.0 配置化）。
+     *
+     * - push 侧 `KafkaQueue::buildMessage` 的 `x-serializer` header 默认值
+     * - consume 侧 `NativeHandler` 裸事件无 header 时的默认
+     *
+     * @return string 'php' / 'json' / 自定义（业务方注册的）
+     */
+    public function serializer(): string
+    {
+        return $this->serializer;
     }
 
     /**

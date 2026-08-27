@@ -246,7 +246,8 @@ final class NativeHandler implements HandlerInterface
         $topic = $message->header(Header::ORIGINAL_TOPIC) ?? 'laravel-jobs';
 
         try {
-            $serializer = $this->resolveSerializer($message->header(Header::SERIALIZER, 'php'));
+            // v0.5.0 配置化: header 缺失时传 null → resolveSerializer 读配置默认 (不写死 'php')
+            $serializer = $this->resolveSerializer($message->header(Header::SERIALIZER));
             $decoded = $serializer->decode($message->payload());
 
             $this->dispatchEvent(new PayloadReceived($topic, $decoded, $message));
@@ -284,7 +285,13 @@ final class NativeHandler implements HandlerInterface
                 'json' => new \LaravelKafka\Producer\Serializer\JsonSerializer(),
             ];
         }
-        $name = (string) ($name ?? 'php');
+        if ($name === null) {
+            // v0.5.0 配置化：裸事件无 x-serializer header 时用 config 默认
+            $name = (string) $this->container->make('config')->get(
+                'kafka.connections.default.serializer',
+                'php'
+            );
+        }
         return $this->serializers[$name] ?? $this->serializer;
     }
 
