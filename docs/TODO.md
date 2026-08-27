@@ -111,14 +111,36 @@ v0.4.7 release 后跑 phpstan level 6 报 120 errors + cs-fixer 报 40 文件 di
 
 ---
 
-## 长期 backlog（v0.5.0+ 考虑）
+## v0.5.0 已完成 (2026-08-27)
+
+**Serializer 真正接入队列管道**（v0.2 设计但一直没实现，probe34/probe35 实测发现是死代码）：
+
+1. **`NativeHandler` 支持裸事件（非 Laravel Job）+ Serializer 反序列化**
+   - `handle()` 加裸事件检测（payload 无 `data.command`）
+   - `handleRawPayload()`：按 `x-serializer` header resolve Serializer → decode → dispatch `PayloadReceived` → ack
+   - `registerSerializer()` 公共 API（兑现文档 §4 承诺）+ `resolveSerializer()` 懒加载 registry（php/json）
+   - 解码失败 → 复用 `onException`（requeue/dlq 与 Laravel Job 一致）
+   - **新事件** `src/Events/PayloadReceived.php`（topic + decoded payload + 原始 Message）
+   - Laravel Job 路径（`Queue::push`/`dispatch` → Worker::process）完全不变，不误触 PayloadReceived
+
+2. **跨语言消费能力**：裸事件 + JsonSerializer 真实可用，Node/Go/Python 可直接 json.loads 读裸事件
+
+3. **重要限制**：Laravel Job 的 `data.command` 是 PHP serialize（Laravel 框架内部格式），
+   跨语言消费**必须用裸事件而非 Laravel Job**（文档 §3 已说明）
+
+**验证**：probe36 7/7（JSON 裸事件 → decode → PayloadReceived 含中文 → ack）+ Laravel Job 不误触。
+phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.0 节。
+
+---
+
+## 长期 backlog（v0.5.1+ 考虑）
 
 ### 1. 业务方 laravel-test 项目的清理
 
 业务方测试项目 `laravel-test/` 在 `vendor/lyn-huang/laravel-kafka/` 是 git archive 快照
 + 手动 Copy-Item 同步 hotfix。**业务方业务环境** `composer require` 装会丢这些 hotfix。
 
-**修法**（v0.5.0）：
+**修法**（v0.5.1）：
 - 业务方 release 后跑 `composer update lyn-huang/laravel-kafka` 重打 vendor
 - 或 git clone 源码 + 手动 `cp -r src/ vendor/lyn-huang/laravel-kafka/src/`
 - README 加 "Business Testing" 章节
@@ -130,7 +152,7 @@ v0.4.7 release 后跑 phpstan level 6 报 120 errors + cs-fixer 报 40 文件 di
 v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis**。v0.4.8 在 CI services
 加了 redis:7.2-alpine + health check, 但 unit test 套件还没用 Testbench 起 Redis connection.
 
-**修法**（v0.5.0）：
+**修法**（v0.5.1）：
 - `tests/Integration/Horizon/` 加 e2e 测试：`KafkaQueueFake` push → `kafka:work` 消费
   → 调 `recordHorizonMetrics` → 验证 Redis 写入
 - 这样 CI 也能跑 Horizon 集成（已有 Redis services）
@@ -139,6 +161,6 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 
 ## 跟踪规则
 
-1. v0.4.8 → v0.5.0：考虑把 #1 laravel-test 清理 + #2 Horizon integration test 一起做
+1. v0.5.0 → v0.5.1：考虑把 #1 laravel-test 清理 + #2 Horizon integration test 一起做
 2. 每次修完从本文件删对应条目，并在 `docs/CHANGELOG.md` 新版本里写 "Fixed" 链接回本文件
-3. v0.4.8 release 后本文件**只剩 backlog**（无 high/medium 优先级）
+3. v0.5.0 release 后本文件**只剩 backlog**（无 high/medium 优先级）

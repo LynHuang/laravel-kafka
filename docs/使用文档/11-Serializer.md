@@ -63,11 +63,12 @@ $serializer->name();  // 'json'
 
 ---
 
-## 3. 切换默认 Serializer
+## 3. 发裸事件（非 Laravel Job）+ 消费
 
-> **v0.4.1 当前限制**：`KafkaQueue::buildMessage()` 硬编码 `Header::SERIALIZER => 'php'`，**不**支持按 connection 切换。
+> **v0.5.0 接入**：`NativeHandler` 真正支持按 `x-serializer` header 选反序列化器。
+> 裸事件（非 Laravel Job payload）→ `JsonSerializer::decode` → dispatch `PayloadReceived` 事件。
 
-业务方在 v0.5 前用 `JsonSerializer` 需要绕过 `Queue::push`，直接用低层 `Producer` API：
+业务方用 `JsonSerializer` 发业务事件（跨语言消费场景），绕过 `Queue::push`，直接用低层 `Producer` API：
 
 ```php
 use LaravelKafka\Producer\Producer;
@@ -86,7 +87,28 @@ $producer->send('order-events', new Message(
 ));
 ```
 
-消费端 `NativeHandler` 自动按 `x-serializer` header 选反序列化器。
+消费端 `NativeHandler` 检测到消息**不是** Laravel Job payload（无 `data.command`）时，
+按 `x-serializer` header 选反序列化器解码，然后 dispatch `PayloadReceived` 事件：
+
+```php
+// app/Providers/EventServiceProvider.php
+use LaravelKafka\Events\PayloadReceived;
+
+Event::listen(PayloadReceived::class, function (PayloadReceived $event) {
+    // $event->payload() = ['event' => 'order.created', 'id' => 123]
+    // $event->topic()   = 'order-events'
+    Log::info('收到业务事件', $event->payload());
+});
+```
+
+**重要**：`Queue::push` / `dispatch` 发的 Laravel Job 走 `Worker::process`，**不**触发
+`PayloadReceived`。裸事件和 Laravel Job 可以在同一 `kafka:work` worker 里混合消费。
+
+### Laravel Job 的序列化限制
+
+`Queue::createPayload` 输出 JSON（外层 `{"uuid", "job", "data.command"}`），其中
+`data.command` 是 **PHP serialize 字符串**——这是 Laravel 框架内部格式，跨语言消费者
+读不懂 `data.command`。**想让 Node/Go/Python 消费，用裸事件（本节）而非 Laravel Job**。
 
 ---
 
@@ -166,30 +188,23 @@ public function register(): void
 
 ### Step 3：消费端按 `x-serializer` 选反序列化器
 
-`NativeHandler` 默认用 `PhpSerializer` 反序列化。业务方有自定义时需扩展：
+`NativeHandler` 默认 registry 含 `php`（PhpSerializer）+ `json`（JsonSerializer）。
+业务方有自定义时用 `registerSerializer()` 注册（v0.5.0 提供）：
 
 ```php
-// app/Kafka/Handlers/CustomNativeHandler.php
-namespace App\Kafka\Handlers;
-
+// app/Providers/AppServiceProvider.php
 use LaravelKafka\Consumer\Handler\NativeHandler;
-use LaravelKafka\Producer\Serializer\PhpSerializer;
-use LaravelKafka\Producer\Serializer\JsonSerializer;
-use App\Kafka\Serializers\AvroSerializer;
 
-class CustomNativeHandler extends NativeHandler
+public function boot(): void
 {
-    public function __construct()
-    {
-        parent::__construct();
-
-        // 注册自定义反序列化器
-        $this->serializers['avro'] = app(AvroSerializer::class);
-    }
+    app()->resolving(NativeHandler::class, function (NativeHandler $handler) {
+        $handler->registerSerializer('avro', app(AvroSerializer::class));
+    });
 }
 ```
 
-> v0.5 完善：`NativeHandler` 提供 `registerSerializer(string $name, Serializer $serializer)` API。
+裸事件消费时按 `x-serializer` header 选对应序列化器：`avro` → AvroSerializer，
+`json` → JsonSerializer，未匹配 → fallback 到默认 PhpSerializer。
 
 ---
 

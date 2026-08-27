@@ -5,6 +5,57 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-08-27
+
+### Added
+
+**Serializer 真正接入队列管道**（v0.2 设计但一直没实现，probe34/probe35 实测发现是死代码）。
+
+#### 1. `NativeHandler` 支持裸事件（非 Laravel Job）+ Serializer 反序列化
+
+**背景**：`Serializer` 类（PhpSerializer/JsonSerializer）之前是死代码——
+push 侧 `buildMessage` 硬编码 `x-serializer='php'`，消费侧 `$serializer` 字段赋值后从没读。
+文档承诺"按 x-serializer 选反序列化器"是假的。probe35 实测裸 JSON 事件被 NativeHandler
+当异常 requeue（不是真正消费事件内容）。
+
+**修法**（`src/Consumer/Handler/NativeHandler.php`）：
+- `handle()` 开头加**裸事件检测**：payload `json_decode` 后无 `data.command` = 非 Laravel Job
+- 新增 `handleRawPayload()`：按 `x-serializer` header resolve Serializer → decode → dispatch
+  `PayloadReceived` 事件 → commit offset → ack
+- 新增 `registerSerializer(string $name, Serializer $serializer)` 公共 API（兑现文档 §4 承诺）
+- 新增 `resolveSerializer()` 懒加载 registry：`php` → PhpSerializer（构造注入默认），`json` → JsonSerializer
+- 解码失败 → dispatch `MessageFailed` + 复用 `onException`（requeue/dlq 与 Laravel Job 一致）
+
+**新事件** `src/Events/PayloadReceived.php`（topic + decoded payload + 原始 Message）：
+业务方监听它处理裸事件。
+
+**Laravel Job 路径完全不变**：`Queue::push` / `dispatch` 仍走 `Worker::process`，不触发 PayloadReceived。
+
+#### 2. 跨语言消费能力
+
+裸事件 + JsonSerializer 现在真实可用：
+- produce：`Producer::send` + `JsonSerializer::encode`（业务方自己 encode + 写 `x-serializer` header）
+- consume：`kafka:work` 同一 worker，NativeHandler 按 header decode → `PayloadReceived` 事件
+- Node/Go/Python 可直接 `json.loads(msg.value)` 读裸事件（无需 PHP）
+
+**重要限制**：Laravel Job 的 `data.command` 是 PHP serialize（Laravel 框架内部格式），
+跨语言消费者读不懂。跨语言场景**用裸事件而非 Laravel Job**。
+
+### Verified
+
+| 项 | 结果 |
+| --- | --- |
+| phpstan level 6 analyse src | ✅ 0 errors |
+| phpunit 137 tests / 287 assertions | ✅ 0 failures |
+| cs-fixer fix --dry-run | ✅ 0 files |
+| probe36 裸事件端到端 | ✅ 7/7：JSON 裸事件 → NativeHandler decode → PayloadReceived（含中文）→ ack |
+| probe36 Laravel Job 不误触 PayloadReceived | ✅ Worker::process 路径不受影响 |
+| probe29 Laravel 8 API 兼容 | ✅ 15/15（v0.4.8 验证过）|
+
+**0 regression**。
+
+---
+
 ## [0.4.9] - 2026-08-27
 
 ### Fixed

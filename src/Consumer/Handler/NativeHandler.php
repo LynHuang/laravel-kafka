@@ -11,6 +11,7 @@ use Illuminate\Queue\WorkerOptions;
 use LaravelKafka\Events\MessageConsumed;
 use LaravelKafka\Events\MessageConsuming;
 use LaravelKafka\Events\MessageFailed;
+use LaravelKafka\Events\PayloadReceived;
 use LaravelKafka\Exceptions\KafkaException;
 use LaravelKafka\Horizon\HorizonMetricsRecorder;
 use LaravelKafka\Producer\Message;
@@ -71,14 +72,23 @@ final class NativeHandler implements HandlerInterface
     /**
      * Payload 反序列化器（默认 PhpSerializer）。
      *
-     * v0.4.8 保留字段: 构造器仍接 Serializer (v0.2 接口兼容), 未来 v0.5 NativeHandler
-     * 内部要切 JsonSerializer 路径时会读. 当前 phpstan 报 never-read 是预期 (死字段),
-     * 加 @phpstan-ignore-next-line 明确.
+     * v0.5.0 起真正被读：{@see resolveSerializer()} 懒加载到 serializers registry
+     * （php → 本字段, json → JsonSerializer）。裸事件（非 Laravel Job）按
+     * `x-serializer` header 选对应序列化器解码。
      *
      * @var Serializer
      */
-    /** @phpstan-ignore-next-line */
     private Serializer $serializer;
+
+    /**
+     * 序列化器 registry（name → Serializer 实例）。
+     *
+     * v0.5.0 新增：默认含 `php` + `json`，业务方用 {@see registerSerializer()}
+     * 注册自定义（如 avro）。裸事件消费时按 `x-serializer` header 选。
+     *
+     * @var array<string, Serializer>|null null = 未初始化（懒加载）
+     */
+    private ?array $serializers = null;
 
     /**
      * 构造时注入所有依赖。
@@ -128,6 +138,11 @@ final class NativeHandler implements HandlerInterface
             throw new KafkaException('Default queue is not a KafkaQueue instance.');
         }
 
+        // v0.5.0: 裸事件检测 —— 非 Laravel Job payload (无 data.command) 走 Serializer 路径
+        if (! $this->isLaravelJobPayload($message->payload())) {
+            return $this->handleRawPayload($message, $queue, $startMs);
+        }
+
         $job = $this->createJob($message, $queue);
 
         $maxAttempts = (int) ($this->container->make('config')->get(
@@ -174,6 +189,103 @@ final class NativeHandler implements HandlerInterface
             $this->recordHorizonMetrics($message, $startMs, false);
             return $this->onException($job, $message, $e);
         }
+    }
+
+    /**
+     * 注册自定义序列化器（v0.5.0，兑现 docs/11-Serializer.md §4 承诺）。
+     *
+     * 裸事件（非 Laravel Job）消费时按 `x-serializer` header 选序列化器解码。
+     * 内置 `php`（PhpSerializer）+ `json`（JsonSerializer）。
+     *
+     * @param string $name `x-serializer` header 值（如 'avro'）
+     * @param Serializer $serializer 序列化器实现
+     * @return void
+     */
+    public function registerSerializer(string $name, Serializer $serializer): void
+    {
+        $this->resolveSerializer(null); // 确保默认 registry 已初始化
+        $this->serializers[$name] = $serializer;
+    }
+
+    /**
+     * 内部：判断 payload 是否是 Laravel Job 格式。
+     *
+     * Laravel `Queue::createPayload` 输出 JSON：`{"uuid":..., "job":"...@call",
+     * "data":{"commandName":..., "command":"O:..."}}`。`data.command` 存在 =
+     * Laravel Job；否则 = 裸事件（非 Job）。
+     *
+     * @param string $raw payload 原始字符串
+     * @return bool true = Laravel Job
+     */
+    private function isLaravelJobPayload(string $raw): bool
+    {
+        $decoded = json_decode($raw, true);
+        return is_array($decoded)
+            && isset($decoded['job'])
+            && isset($decoded['data']['command']);
+    }
+
+    /**
+     * 内部：处理裸事件（非 Laravel Job）。
+     *
+     * ## 流程
+     *
+     *  1. 按 `x-serializer` header resolve Serializer
+     *  2. `Serializer::decode()` 解码 payload
+     *  3. dispatch `PayloadReceived` 事件（业务方监听处理）
+     *  4. commit offset（裸事件无 KafkaJob，直接提交当前消费位置）
+     *  5. 解码失败 → dispatch `MessageFailed` + 复用 `onException`（requeue/dlq）
+     *
+     * @param Message $message 消费侧包装的消息
+     * @param KafkaQueue $queue 默认 KafkaQueue 实例
+     * @param float $startMs 处理开始时间戳（ms）
+     * @return HandlerResult
+     */
+    private function handleRawPayload(Message $message, KafkaQueue $queue, float $startMs): HandlerResult
+    {
+        $topic = $message->header(Header::ORIGINAL_TOPIC) ?? 'laravel-jobs';
+
+        try {
+            $serializer = $this->resolveSerializer($message->header(Header::SERIALIZER, 'php'));
+            $decoded = $serializer->decode($message->payload());
+
+            $this->dispatchEvent(new PayloadReceived($topic, $decoded, $message));
+            $this->recordHorizonMetrics($message, $startMs, true);
+
+            // ack 副作用：裸事件无 KafkaJob::delete()，直接提交当前 consumer offset
+            $consumer = $this->container->make(\LaravelKafka\Consumer\Consumer::class);
+            $consumer->commitAsync();
+
+            return HandlerResult::ack();
+        } catch (Throwable $e) {
+            $this->dispatchEvent(new MessageFailed($topic, $message, $e));
+            $this->recordHorizonMetrics($message, $startMs, false);
+
+            // 复用 Laravel Job 的 requeue/dlq 决策（构造 KafkaJob 给 failedHandler）
+            $job = $this->createJob($message, $queue);
+            return $this->onException($job, $message, $e);
+        }
+    }
+
+    /**
+     * 内部：按 `x-serializer` header 选序列化器（v0.5.0）。
+     *
+     * 懒加载默认 registry：`php` → 构造注入的 $serializer（PhpSerializer），
+     * `json` → 新 JsonSerializer。业务方用 {@see registerSerializer()} 扩展。
+     *
+     * @param string|null $name `x-serializer` header 值（null = 默认 php）
+     * @return Serializer 匹配的序列化器（未匹配 fallback 到构造注入的默认）
+     */
+    private function resolveSerializer(?string $name): Serializer
+    {
+        if ($this->serializers === null) {
+            $this->serializers = [
+                'php' => $this->serializer,
+                'json' => new \LaravelKafka\Producer\Serializer\JsonSerializer(),
+            ];
+        }
+        $name = (string) ($name ?? 'php');
+        return $this->serializers[$name] ?? $this->serializer;
     }
 
     /**
