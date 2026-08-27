@@ -1,7 +1,7 @@
 # TODO / Technical Debt
 
 本包所有版本待办技术债的**集中清单**。每条记录**踩坑背景** + **修法方向** + **优先级**，
-未来版本（v0.4.7+）回到这包时按这个清单走。
+未来版本（v0.4.8+）回到这包时按这个清单走。
 
 来源：v0.4.0 release 后的多次业务方实测 + 后续维护中发现。
 
@@ -49,9 +49,59 @@ v0.4.5 release 后业务方跑 e2e probe32 (`queue:work` 真消费) + probe33 (H
 
 ---
 
-## v0.4.6 → v0.4.7 待办
+## v0.4.7 已完成 (2026-08-27)
 
-### 1. chain API 误用陷阱（中优先级，文档已加，源码层防御可选）
+v0.4.6 release 后跑 phpunit 137/287 全过（之前 `KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer` 在 CI fail），删 `.github/workflows/tests.yml` 里 v0.4.3 hotfix 加的 `continue-on-error: true`。
+
+1. **`KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer` 核心断言改写**
+   - v0.4.3-0.4.6 假设 `non-fake 模式下 pushRaw 必抛 Throwable`（因为没真 Kafka 集群），但 CI runner 有 `services.kafka` (KRaft 单 broker) + 业务方本机有 Kafka，**真发成功不抛**，test fail。
+   - 改核心断言：从"无 Kafka 抛异常" → **"non-fake 模式不写 FakeMessageStorage"**（无论真发成功/抛 KafkaException）。
+   - 接受两种环境（有 Kafka 断言 return isInt，无 Kafka 用 addToAssertionCount 接受异常）。
+   - 关键断言 `$this->assertSame(0, $storage->count())` 保持不变。
+
+2. **CI tests.yml 删 `continue-on-error: true`**
+   - `tests.yml` Run tests step 删 v0.4.3 hotfix 加的 `continue-on-error: true` + 更新注释。
+   - **linter.yml 保留** `continue-on-error: true`：phpstan 120 errors + cs-fixer 40 文件修复仍是历史债，v0.4.7 不修（工作量太大），留到 v0.4.8。
+
+0 regression。详见 `docs/CHANGELOG.md` v0.4.7 节。
+
+---
+
+## v0.4.7 → v0.4.8 待办
+
+### 1. phpstan 历史 120 errors（中优先级，linter continue-on-error 已加）
+
+**踩坑**：v0.4.1 时 PHPStan level 6 报 120 errors，分 4 类：
+
+- **Dynamic property 缺失**（70+ errors）：`KafkaConfig` / `Message` / `Events/*` / `FailedContext` 等类在 `__construct` 赋值但**没显式 `private` property 声明**（PHP 8.2+ 默认禁止 dynamic property）。
+- **Illuminate 类型 mismatch**（4 errors）：`Illuminate\Container\Container` vs `Illuminate\Contracts\Container\Container`。
+- **`createPayload` 参数**（3 errors）：4 参数调用但父类只接受 2-3 个。
+- **Never read / unreachable**（5 errors）：写不读 property + 死代码分支。
+
+**现状**：`.github/workflows/linter.yml` phpstan step 有 `continue-on-error: true`。
+
+**修法**：
+- 修业务代码 120 errors（`KafkaConfig` 等加显式 property 声明，删 unused imports / properties，修 `createPayload` 参数兼容）
+- 删 workflow 里的 `continue-on-error: true`
+- 不降 phpstan ruleset
+
+**优先级**：中（CI 实际能卡 linter 是好事，但 120 errors 是历史债 + 修起来工作量大）
+
+---
+
+### 2. PHP-CS-Fixer 40 文件风格修复（低优先级，linter continue-on-error 已加）
+
+**踩坑**：v0.4.1 round 7 时 cs-fixer 3.95 在 PHP 8.1 对 40 个文件提 diff（`$this->assert* → self::assert*`、删 unused imports、ordered_class_elements 重排等）。PHP 7.4 上都合法，但 cs-fixer --dry-run 任何待修即 exit 8。
+
+**现状**：`.github/workflows/linter.yml` cs-fixer step 有 `continue-on-error: true`。
+
+**修法**：跑 `vendor/bin/php-cs-fixer fix` 自动应用修复，commit 改动，删 `continue-on-error`。
+
+**优先级**：低（风格修复不影响功能）。
+
+---
+
+### 3. chain API 误用陷阱源码层防御（中优先级，决定跳过）
 
 **踩坑**（probe31 实测发现）：业务方写 `$a->chain([B, C])->dispatch()` 推 orderId=0 到 queue。
 
@@ -60,45 +110,10 @@ v0.4.5 release 后业务方跑 e2e probe32 (`queue:work` 真消费) + probe33 (H
 - 链式 `->dispatch()` 调 `Dispatchable::dispatch()` **static** 方法 → `new static()` **不带参数**
 - 推到 queue 的是 `new OrderJob()`（orderId=0），**不是** `$a`！
 
-**实测验证**（`laravel-test/probe31f-queue-push.php`）：
-```
-offset=200 (Bus::chain API):   orderId=555  ✅
-offset=201 ($a->chain API):     orderId=0    ❌ 误用!
-```
-
 **修法**：
 - ✅ **已完成（v0.4.5）**：写 `docs/使用文档/17-Task-Chain.md` 详细说明 + 3 种正确写法（`Job::withChain` / `Bus::chain` / `Bus::dispatch($a)` 手动）
-- 可选 v0.4.7：在本包 `KafkaQueue::push()` 里加 inspect + 警告（如果 `$job->chained` 非空但 `$job->orderId=0` 等异常模式）
-- 优先级：中（业务方按文档写即可，源码层防御可选）
-
----
-
-### 2. KafkaQueueFakeTest 期望错（低优先级，continue-on-error 已加）
-
-**踩坑**：`tests/Unit/Queue/KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer`
-假设 non-fake 模式下 `pushRaw` 必抛 Throwable，但 CI runner 有 `services.kafka` (KRaft 单 broker)
-+ 业务方本机有 Kafka，`pushRaw` 真能成功，test 期望错。
-
-**修法**：
-- 改 test 期望：用 mock producer 注入到 `KafkaQueueFake`，verify 调过 Producer
-- 不要依赖"无 Kafka 就抛 Throwable"假设
-- 完成后删除 `.github/workflows/tests.yml` 的 `continue-on-error: true`
-
----
-
-### 3. phpstan 历史 120 errors（低优先级，continue-on-error 已加）
-
-**踩坑**：v0.4.1 时 PHP-CS-Fixer 3.95 在 PHP 8.1 跑 + phpstan level 6 报 120 errors
-（`KafkaConfig` 等类的 dynamic property / never-read / visibility / `createPayload` 参数）。
-
-**现状**：`.github/workflows/tests.yml` + `.github/workflows/linter.yml` 都有
-`continue-on-error: true`，业务方技术债**注释里写明 v0.4.7 清理**。
-
-**修法**：
-- 修业务代码 120 errors（`KafkaConfig` dynamic property 加 `#[\AllowDynamicProperties]`
-  或显式声明 property，删 unused imports，重排 `ordered_class_elements`，修 `createPayload` 参数类型）
-- 删 workflow 里的 `continue-on-error: true`
-- 不降 phpstan ruleset
+- v0.4.7 评估：源码层防御代价 > 收益（需要改 Laravel 框架 trait 行为或 Reflection 调用栈检测）
+- v0.4.8 决定：**跳过源码层防御**，文档化已充分
 
 ---
 
@@ -115,7 +130,7 @@ offset=201 ($a->chain API):     orderId=0    ❌ 误用!
 
 ---
 
-## 长期 backlog（v0.4.7+ 考虑）
+## 长期 backlog（v0.4.8+ 考虑）
 
 ### 5. JsonSerializer（业务方没测，独立功能）
 
@@ -124,7 +139,7 @@ offset=201 ($a->chain API):     orderId=0    ❌ 误用!
 JsonSerializer 路径在测试套件里没覆盖。
 
 **修法**：
-- v0.4.7 加 unit test for `JsonSerializer::unserialize` 路径
+- v0.4.8 加 unit test for `JsonSerializer::unserialize` 路径
 - 加 Integration test 验证 push 出去的 payload 是 JSON 格式
 - 文档里 `docs/11-Serializer.md` 已经在 v0.4 说过，业务方没真测过
 
@@ -136,7 +151,7 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 `Redis::connection('default')` 包装层 + 业务方本机 Redis 6379 跑通，**但 CI runner 没 Redis**。
 所以 Horizon 集成测试在 CI 跑不了（run #20 tests 实际是 unit test，没有 Horizon 集成）。
 
-**修法**（v0.4.7）：
+**修法**（v0.4.8）：
 - `.github/workflows/tests.yml` services 加 Redis service
 - `tests/Integration/Horizon/` 加 e2e 测试：`KafkaQueueFake` push → `kafka:work` 消费
   → 调 `recordHorizonMetrics` → 验证 Redis 写入
@@ -149,7 +164,7 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 业务方测试项目 `laravel-test/` 在 `vendor/lyn-huang/laravel-kafka/` 是 git archive 快照
 + 手动 Copy-Item 同步 hotfix。**业务方业务环境** `composer require` 装会丢这些 hotfix。
 
-**修法**（v0.4.7）：
+**修法**（v0.4.8）：
 - 业务方 release 后跑 `composer update lyn-huang/laravel-kafka` 重打 vendor
 - 或 git clone 源码 + 手动 `cp -r src/ vendor/lyn-huang/laravel-kafka/src/`
 - README 加 "Business Testing" 章节
@@ -158,8 +173,8 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 
 ## 跟踪规则
 
-1. v0.4.6 → v0.4.7：处理 #1（chain API 防御，可选）、#2（KafkaQueueFakeTest）、#3（phpstan）
-2. v0.4.7 → v0.5.0：处理 #4（librdkafka 升级）、#5（JsonSerializer）、#6（CI Redis service）
+1. v0.4.7 → v0.4.8：处理 #1（phpstan 120 errors）、#2（cs-fixer 40 文件）
+2. v0.4.8 → v0.5.0：处理 #3（chain 防御，已决定跳）、#4（librdkafka 升级）、#5（JsonSerializer）、#6（CI Redis service）
 3. #7（laravel-test 清理）是文档性，**不**算技术债，业务方按需处理
 4. 每次修完从本文件删对应条目，并在 `docs/CHANGELOG.md` 新版本里写 "Fixed" 链接回本文件
-5. CI 跑 v0.4.7 时本文件应该有 0 条 high 优先级条目
+5. CI 跑 v0.4.8 时本文件应该有 0 条 high 优先级条目

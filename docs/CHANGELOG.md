@@ -5,6 +5,53 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.7] - 2026-08-27
+
+### Fixed
+
+v0.4.6 release 后 phpunit 137/137 全过（之前 `KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer` 在 CI fail），删 `.github/workflows/tests.yml` 里 v0.4.3 hotfix 加的 `continue-on-error: true`。
+
+#### 1. `KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer` 核心断言改写
+
+**症状**（v0.4.3-0.4.6 已知问题）：测试假设 `non-fake 模式下 pushRaw 必抛 Throwable（因为没真 Kafka 集群）`，但 CI runner 有 `services.kafka` (KRaft 单 broker) + 业务方本机有 Kafka，**真发成功不抛**，test fail。
+
+**根因**：测试**写错了"无 Kafka"假设**——CI 实际**有** Kafka 在跑（services.kafka block 启动 KRaft broker on localhost:9092）。
+
+**修法**（`tests/Unit/Queue/KafkaQueueFakeTest.php`）：
+- 改核心断言：从"无 Kafka 抛异常" → **"non-fake 模式不写 FakeMessageStorage"**（无论真发成功/抛 KafkaException）
+- 接受两种环境：
+  - **有 Kafka**：真发成功，断言 `pushRaw` return isInt
+  - **无 Kafka**：抛 `KafkaException`，用 `$this->addToAssertionCount(1)` 接受
+- 关键断言 `$this->assertSame(0, $storage->count())` 保持不变
+
+#### 2. CI tests.yml 删 `continue-on-error: true`
+
+**症状**：`tests.yml` Run tests step 一直带 `continue-on-error: true`（v0.4.3 hotfix 加），CI 不真正卡 tests 失败——掩盖了真 bug。
+
+**修法**（`.github/workflows/tests.yml`）：删 `continue-on-error: true` + 更新注释说明修复内容。
+
+**linter.yml 保留** `continue-on-error: true`：phpstan 120 errors + cs-fixer 40 文件修复仍是历史债，**v0.4.7 不修**（工作量太大），留到 v0.5/v0.4.8。
+
+### Verified
+
+| 测试 | 结果 |
+| --- | --- |
+| 本机 phpunit 137 tests | ✅ 287 assertions, 0 failures |
+| CI services.kafka 真发路径 | ✅ `KafkaQueueFakeTest` 通过 |
+| 业务方业务方本机 phpunit 137 tests | ✅ 287 assertions, 0 failures |
+
+**0 regression**。
+
+### Known Limitations（v0.4.7 仍然 NOT 修的）
+
+| 事项 | 状态 | 详情 |
+| --- | --- | --- |
+| phpstan 120 errors | ⚠️ continue-on-error | v0.4.1 已知，dynamic property + never-read + visibility + createPayload 参数，待 v0.5 清理 |
+| cs-fixer 40 文件风格修复 | ⚠️ continue-on-error | `$this->assert* → self::assert*`、unused imports、ordered_class_elements 等 |
+| chain API 误用源码层防御 | ⚠️ 文档已加 | `$a->chain()->dispatch()` 误用是 Laravel 8 框架 API 缺陷，源码层防御代价大于收益 |
+
+---
+
 ## [0.4.6] - 2026-08-27
 
 ### Fixed

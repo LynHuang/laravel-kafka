@@ -17,7 +17,16 @@ final class KafkaQueueFakeTest extends TestCase
 {
     public function testPushRawInNormalModeGoesToRealProducer(): void
     {
-        // 默认配置：非 fake 模式
+        // v0.4.7 修复: 之前测试假设 "real producer 不可用会抛 KafkaException",
+        // 但 CI runner (services.kafka) + 业务方本机都有 Kafka, 真发成功不抛, test fail.
+        //
+        // 核心断言改为: non-fake 模式下, pushRaw 走 Producer.send 真发路径,
+        // **不**写 FakeMessageStorage (storage 计数为 0).
+        //
+        // 接受两种环境:
+        //  - 有 Kafka: 真发成功, 返回 partition 编号 (int)
+        //  - 无 Kafka: 抛 KafkaException (本机/CI 没 Kafka 集群)
+        // 两种情况都验证 storage 没被写.
         $manager = $this->app->make(KafkaManager::class);
         $this->assertFalse($manager->isFake());
 
@@ -25,10 +34,19 @@ final class KafkaQueueFakeTest extends TestCase
         $storage = new FakeMessageStorage();
         $this->app->instance(FakeMessageStorage::class, $storage);
 
-        // 期待：real producer 不可用，会抛 KafkaException（因为没真 Kafka 集群）
         $queue = $manager->connection();
-        $this->expectException(\Throwable::class);
-        $queue->pushRaw('test-payload', 'default');
+
+        try {
+            $result = $queue->pushRaw('test-payload', 'default');
+            // 真发成功: 返回 partition 编号
+            $this->assertIsInt($result);
+        } catch (\LaravelKafka\Exceptions\KafkaException $e) {
+            // 本机/CI 无 Kafka 集群: 接受抛 KafkaException
+            $this->addToAssertionCount(1);
+        }
+
+        // 关键断言: 无论真发成功/失败, non-fake 模式不应写 storage
+        $this->assertSame(0, $storage->count(), 'non-fake 模式不应写 fake storage');
     }
 
     public function testPushRawInFakeModeRecordsToStorage(): void

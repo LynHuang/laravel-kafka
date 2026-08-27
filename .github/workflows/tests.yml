@@ -98,11 +98,11 @@ jobs:
           exit 1
 
       - name: Run tests
-        # v0.4.3 hotfix 注释: KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer 假设
-        # "non-fake 模式下 pushRaw 必抛 Throwable", 但业务方 + CI runner 都有真 Kafka
-        # (services.kafka block), pushRaw 真能成功, test 期望错.
-        # v0.4.4 待办: 改 test 期望 (mock producer / 改 test 假设).
-        continue-on-error: true
+        # v0.4.7 修复: KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer
+        # 之前假设 "non-fake 模式下 pushRaw 必抛 Throwable", 但 CI 有真 Kafka
+        # (services.kafka) + 业务方本机有 Kafka, pushRaw 真发成功, test 期望错.
+        # 现在改核心断言: non-fake 模式不写 FakeMessageStorage (无论真发成功/抛异常).
+        # 删 v0.4.3 hotfix 加的 continue-on-error: true.
         run: vendor/bin/phpunit --testsuite=Unit
 
   integration:
