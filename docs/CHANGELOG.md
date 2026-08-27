@@ -5,6 +5,78 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.3] - 2026-08-27
+
+### Fixed
+
+v0.4.1 (7965bf2) CI 全过但**业务方真实跑通时发现 9 个 P0 bug**（push 100% 失败 / Worker 起不来）。
+**注**: 远端 0.4.2 是业务方业务方昨天 2026-08-26 19:30 在 eeaa9a9 上打的轻量占位 tag ("0.4.2清理多余文件"), 非本业务方业务方发布版本. 业务方业务方 9 hotfix 跳 0.4.2 直接发 v0.4.3.
+
+本版本 9 项 hotfix 全部修了, 业务方 laravel-test 实测 (PHP 7.4.3 + ext-rdkafka 1.6.2 + Kafka KRaft 单 broker):
+
+#### 1. KafkaConfig 配置翻译 (业务方友好名 → librdkafka 原生名)
+
+`src/Config/KafkaConfig.php` — 加 `PRODUCER_KEY_MAP` / `CONSUMER_KEY_MAP` / `translateKeys()`,
+把业务方在 `config/kafka.php` 写的友好命名 (`compression` / `batch_size` / `linger_ms` / `request_timeout_ms`
+/ `message_timeout_ms` / `enable_idempotence` / `max_poll_interval_ms` / `session_timeout_ms`
+/ `heartbeat_interval_ms` / `fetch_min_bytes` / `fetch_max_bytes` / `enable_auto_commit`)
+翻译成 librdkafka 实际接受的全限定 key (`compression.type` / `batch.size` / ...).
+
+**根因**:`stringifyConfig()` 之前直接透传业务方 key 给 librdkafka →
+`Local: No such configuration property: "compression"` 错 → Producer 构造失败 → push 100% 失败.
+
+#### 2. Producer::fromConf() dr_msg_cb 时序
+
+`src/Producer/Producer.php` — 重写 `fromConf()` 用 `&$instanceRef` reference 模式.
+
+**根因**:librdkafka 要求 `setDrMsgCb` 必须在 `new RdKafka\Producer($conf)` **之前**注册.
+旧实现先 `new` 再 `setDrMsgCb` → callback 实际不生效 → `produce()` 5s 后 timeout.
+同时删了文件底部重复定义的旧 `fromConf` (v0.1 时代遗留).
+
+#### 3. LaravelKafkaServiceProvider 4 处显式容器绑定
+
+`src/LaravelKafkaServiceProvider.php:boot()` — 加 4 处:
+
+- `Worker::class` alias → `queue.worker` 单例 (register 阶段 `queue.worker` 未绑, 必须放 boot)
+- `FailedJobHandlerInterface` 绑到 `FailedJobHandlerFactory::makeFor(default config)` (接口, 容器无法自动解析, NativeHandler 构造时触发 "is not instantiable")
+- `Serializer::class` 绑到 `PhpSerializer` (同上)
+- `Consumer::class` 绑到 `ConsumerFactory::make(config)` (构造声明 `RdKafka\KafkaConsumer`)
+- `Queue::extend` 闭包改 **0 参数** (Laravel 8.x `QueueManager::getConnector()` 用 `call_user_func($this->connectors[$driver])` 0 参数调闭包, 之前传 `$app` 触发 PHP 7.4 警告)
+
+#### 4. KafkaJob::fail() 默认值 + 删 reflection markAsFailed
+
+`src/Queue/KafkaJob.php` — `fail($exception)` → `fail($exception = null)` 兼容
+`Illuminate\Contracts\Queue\Job::fail($e = null)` 父类签名 (Laravel 8.x 父类签名有默认值).
+
+**附**: 删了 v0.1 时代用 `ReflectionClass` 调父类 `private markAsFailed()` 的代码 —
+Laravel 8.x 父类 `markAsFailed()` 是 `public`, reflection 调 private 触发
+`Cannot access private method` FatalError. 直接 `$this->markAsFailed()` 继承即可.
+
+#### 5. DlqTailCommand Conf::get() 移除
+
+`src/Console/DlqTailCommand.php` — 用本地 `$groupId` 变量打印日志, 不再调
+`$conf->get('group.id')` (部分 ext-rdkafka 版本 `Conf::get()` 方法不存在).
+
+#### 6. NativeHandler $startMs 漏声明
+
+`src/Consumer/Handler/NativeHandler.php:handle()` — 开头加 `$startMs = microtime(true);`.
+v0.4 引入 Horizon metrics 时重构漏的变量, try 块和 catch 块都用了 `$startMs`
+但 handle() 开头没声明, 业务方跑 `kafka:work` 必报 `Undefined variable: $startMs`.
+
+#### 7. .gitignore 加 /laravel-test/
+
+`.gitignore` — 加 `/laravel-test/` 排除业务方测试项目, 避免污染本包 git.
+
+#### 业务方实测结果 (本版本验证)
+
+在 `laravel-test` (PHP 7.4.3 + ext-rdkafka 1.6.2 + Kafka 3.x KRaft 单 broker) 实测:
+**10 项功能完整通过 + 4 项 partial + 2 项 skip (Horizon/SSL 缺环境)**.
+详见业务方测试报告. DLQ 链路验证 (probe12): 6 条 DLQ 消息落盘, 三种 payload 格式
+(raw JSON / `__fail` 标志 / Laravel Queue 完整 `uuid`+`displayName`+`job`) 全部保留.
+
+**已知问题** (非本包代码 bug, 留给 v0.4.3 / 升级 librdkafka 1.9+):
+- librdkafka 1.6.2 + Windows + IPv4/IPv6 切换下, group commit 请求 60s timeout (max-time 强退副作用, 长跑稳定)
+
 ## [0.4.1] - 2026-08-26
 
 ### Fixed
