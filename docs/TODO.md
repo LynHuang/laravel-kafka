@@ -23,7 +23,7 @@
 
 ---
 
-## v0.4.5 → v0.5.0 待办
+## v0.4.5 → v0.4.6 待办
 
 ### 1. `queue:work` 真消费（不是设计选择，是 v0.4.5 已知限制）
 
@@ -37,7 +37,7 @@
 **业务方影响**：业务方**必须**用 `php artisan kafka:work` 而非 `php artisan queue:work`。
 `queue:work` 命令虽能 exit=0 但**消费不到任何 Kafka 消息**。
 
-**修法**（v0.5 评估工作量）：
+**修法**（v0.4.6 评估工作量）：
 - **方案 A（推荐）**：在 `KafkaQueue::pop()` 里实现 100ms 同步阻塞 poll，包装 NativeHandler 调用，
   让 `queue:work` 能用。但牺牲 Kafka 长轮询优势。
 - **方案 B（文档化）**：在 `docs/12-Worker-Commands.md` 加醒目警告："本包必须用 `kafka:work`
@@ -85,7 +85,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 （`KafkaConfig` 等类的 dynamic property / never-read / visibility / `createPayload` 参数）。
 
 **现状**：`.github/workflows/tests.yml` + `.github/workflows/linter.yml` 都有
-`continue-on-error: true`，业务方技术债**注释里写明 v0.5 清理**。
+`continue-on-error: true`，业务方技术债**注释里写明 v0.4.6 清理**。
 
 **修法**：
 - 修业务代码 120 errors（`KafkaConfig` dynamic property 加 `#[\AllowDynamicProperties]`
@@ -108,7 +108,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 
 ---
 
-## 长期 backlog（v0.5+ 考虑）
+## 长期 backlog（v0.4.7+ 考虑）
 
 ### 6. JsonSerializer（业务方没测，独立功能）
 
@@ -117,7 +117,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 JsonSerializer 路径在测试套件里没覆盖。
 
 **修法**：
-- v0.5 加 unit test for `JsonSerializer::unserialize` 路径
+- v0.4.7 加 unit test for `JsonSerializer::unserialize` 路径
 - 加 Integration test 验证 push 出去的 payload 是 JSON 格式
 - 文档里 `docs/11-Serializer.md` 已经在 v0.4 说过，业务方没真测过
 
@@ -129,7 +129,7 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 `Redis::connection('default')` 包装层 + 业务方本机 Redis 6379 跑通，**但 CI runner 没 Redis**。
 所以 Horizon 集成测试在 CI 跑不了（run #20 tests 实际是 unit test，没有 Horizon 集成）。
 
-**修法**（v0.5）：
+**修法**（v0.4.7）：
 - `.github/workflows/tests.yml` services 加 Redis service
 - `tests/Integration/Horizon/` 加 e2e 测试：`KafkaQueueFake` push → `kafka:work` 消费
   → 调 `recordHorizonMetrics` → 验证 Redis 写入
@@ -142,7 +142,7 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 业务方测试项目 `laravel-test/` 在 `vendor/lyn-huang/laravel-kafka/` 是 git archive 快照
 + 手动 Copy-Item 同步 hotfix。**业务方业务环境** `composer require` 装会丢这些 hotfix。
 
-**修法**（v0.5）：
+**修法**（v0.4.7）：
 - 业务方 release 后跑 `composer update lyn-huang/laravel-kafka` 重打 vendor
 - 或 git clone 源码 + 手动 `cp -r src/ vendor/lyn-huang/laravel-kafka/src/`
 - README 加 "Business Testing" 章节
@@ -151,9 +151,9 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 
 ## 跟踪规则
 
-1. v0.4.5 → v0.5.0：处理 #1（queue:work 兼容）、#2（snapshotJob）、#3（KafkaQueueFakeTest）、#4（phpstan）
-2. v0.5.0 → v0.6.0：处理 #5（librdkafka 升级）、#6（JsonSerializer）、#7（CI Redis service）
+1. v0.4.5 → v0.4.6：处理 #1（queue:work 兼容）、#2（snapshotJob）、#3（KafkaQueueFakeTest）、#4（phpstan）
+2. v0.4.6 → v0.4.7：处理 #5（librdkafka 升级）、#6（JsonSerializer）、#7（CI Redis service）
 3. #8（laravel-test 清理）是文档性，**不**算技术债，业务方按需处理
 4. 每次修完从本文件删对应条目，并在 `docs/CHANGELOG.md` 新版本里写 "Fixed" 链接回本文件
-5. CI 跑 v0.5.0 时本文件应该有 0 条 high 优先级条目
+5. CI 跑 v0.4.6 时本文件应该有 0 条 high 优先级条目
 
