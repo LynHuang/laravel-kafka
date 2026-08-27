@@ -21,8 +21,8 @@ final class HorizonMetricsRecorderTest extends TestCase
         $redis = m::mock();
         $recorder = new HorizonMetricsRecorder($redis, 'my-conn', 'my-prefix:');
 
-        $this->assertSame('my-prefix:', $recorder->prefix());
-        $this->assertSame('my-conn', $recorder->connection());
+        self::assertSame('my-prefix:', $recorder->prefix());
+        self::assertSame('my-conn', $recorder->connection());
     }
 
     public function testDefaultPrefixIsHorizon(): void
@@ -30,8 +30,8 @@ final class HorizonMetricsRecorderTest extends TestCase
         $redis = m::mock();
         $recorder = new HorizonMetricsRecorder($redis);
 
-        $this->assertSame('horizon:', $recorder->prefix());
-        $this->assertSame('horizon', $recorder->connection());
+        self::assertSame('horizon:', $recorder->prefix());
+        self::assertSame('horizon', $recorder->connection());
     }
 
     public function testConstructorRejectsNullRedis(): void

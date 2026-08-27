@@ -8,40 +8,43 @@ use LaravelKafka\Producer\Message;
 use Throwable;
 
 /**
- * 失败消息写入 DLQ topic 后 dispatch。
+ * 在 `DlqFailedJobHandler` / `HybridFailedJobHandler` 写完 DLQ topic 后 dispatch。
  *
- * ## 触发条件
+ * ## 业务方监听时机
  *
- * - `failed.driver = dlq` 模式：每条失败消息都进 DLQ → 必触发
- * - `failed.driver = hybrid` 模式：致命异常 / 达 max_attempts 时进 DLQ → 部分触发
- * - `failed.driver = database` 模式：**不**写 DLQ → 不触发
- *
- * ## 与 {@see MessageFailed} 的顺序
- *
- * ```
- * 业务抛异常
- *   ↓
- * MessageFailed dispatched
- *   ↓
- * failedHandler.handle()  // 写表 + 写 DLQ
- *   ↓
- * MessageSentToDLQ dispatched (仅当 DLQ 实际写入)
- * ```
+ * 想"这条消息进 DLQ 了" → 监听本事件。
  *
  * ## 典型用途
  *
- * - DLQ 消费告警（"DLQ 里又堆积了 1000 条失败消息"）
- * - metrics 计数（按 topic / exception class 拆）
- * - 关联追踪（用 `dlqTopic()` 定位写到哪个 DLQ）
+ * - DLQ 告警（业务方业务方业务场景下想知道哪条消息进 DLQ）
+ * - trace span 标记 fatal
+ * - 业务方业务方手动 replay 前的清理工作
  *
- * @see \LaravelKafka\Queue\Failed\DlqFailedJobHandler 触发点
+ * ## 触发点
+ *
+ * `DlqFailedJobHandler::handle` 调 `Producer::send` 到 DLQ topic 成功后同步 dispatch。
  */
 final class MessageSentToDLQ
 {
     /**
-     * @param string    $dlqTopic 写入的 DLQ topic 名
-     * @param Message   $message   原消息（payload 不重新序列化）
-     * @param Throwable $error     业务抛出的异常
+     * DLQ topic 名（来自 `kafka.connections.*.failed.dlq.topic`）。
+     */
+    private string $dlqTopic;
+
+    /**
+     * 消费侧包装的消息（含 header / payload）。
+     */
+    private Message $message;
+
+    /**
+     * 触发 DLQ 的原始异常。
+     */
+    private Throwable $error;
+
+    /**
+     * @param string $dlqTopic DLQ topic 名
+     * @param Message $message 消费侧包装的消息
+     * @param Throwable $error 触发 DLQ 的原始异常
      */
     public function __construct(
         string $dlqTopic,
@@ -55,8 +58,6 @@ final class MessageSentToDLQ
 
     /**
      * DLQ topic 名。
-     *
-     * @return string
      */
     public function dlqTopic(): string
     {
@@ -64,9 +65,7 @@ final class MessageSentToDLQ
     }
 
     /**
-     * 原消息值对象。
-     *
-     * @return Message
+     * 消息值对象。
      */
     public function message(): Message
     {
@@ -74,9 +73,7 @@ final class MessageSentToDLQ
     }
 
     /**
-     * 业务抛出的异常对象。
-     *
-     * @return Throwable
+     * 触发 DLQ 的原始异常。
      */
     public function error(): Throwable
     {

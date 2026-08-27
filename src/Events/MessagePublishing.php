@@ -7,43 +7,38 @@ namespace LaravelKafka\Events;
 use LaravelKafka\Producer\Message;
 
 /**
- * 在调用 `KafkaQueue::pushRaw` 之后、`Producer::send` 之前 dispatch。
+ * 在 `KafkaQueue::pushRaw` 调 `Producer::send` 之前 dispatch。
  *
  * ## 业务方监听时机
  *
- * - 想"我准备发这条消息了" → 监听本事件
- * - 想"这条消息已经成功落地" → 监听 {@see MessagePublished}
+ * 想"我准备发这条消息了" → 监听本事件。
  *
  * ## 典型用途
  *
- * - metrics 计数（消息生产前 / 生产后分别埋点）
- * - trace span 开始（与 {@see MessagePublished} 配对）
- * - 敏感字段过滤（mask 信用卡号等）
- * - 审计日志
+ * - 投递 trace span 开始
+ * - 业务方想在 send 前改 message（不推荐——应该传时改）
  *
- * ## 业务方使用
+ * ## 触发点
  *
- * ```php
- * use LaravelKafka\Events\MessagePublishing;
- * use Illuminate\Support\Facades\Event;
+ * `KafkaQueue::pushRaw` 在 fake 模式检查之前同步 dispatch。
  *
- * Event::listen(MessagePublishing::class, function (MessagePublishing $event) {
- *     Log::info('publishing', [
- *         'topic' => $event->topic(),
- *         'payload_size' => strlen($event->message()->payload()),
- *     ]);
- * });
- * ```
- *
- * @see \LaravelKafka\Events\MessagePublished 配对事件
- * @see \LaravelKafka\Queue\KafkaQueue::pushRaw() 触发点
+ * @see \LaravelKafka\Events\MessagePublished 投递后
  */
 final class MessagePublishing
 {
     /**
-     * 物理 topic 名（已解析过 `KafkaConfig::resolveTopic`）。
-     *
-     * @param string $topic
+     * 消息准备投递到的物理 topic。
+     */
+    private string $topic;
+
+    /**
+     * 消费侧包装的消息（含 header / payload）。
+     */
+    private Message $message;
+
+    /**
+     * @param string $topic  消息准备投递到的物理 topic
+     * @param Message $message 消费侧包装的消息
      */
     public function __construct(
         string $topic,
@@ -54,9 +49,7 @@ final class MessagePublishing
     }
 
     /**
-     * 拿到物理 topic 名。
-     *
-     * @return string
+     * 物理 topic 名。
      */
     public function topic(): string
     {
@@ -64,9 +57,7 @@ final class MessagePublishing
     }
 
     /**
-     * 拿到消息值对象（含 payload / headers / key）。
-     *
-     * @return Message
+     * 消息值对象。
      */
     public function message(): Message
     {

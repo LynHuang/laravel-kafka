@@ -30,6 +30,33 @@ namespace LaravelKafka\Queue\Failed;
 final class FailedContext
 {
     /**
+     * 原始消息体（未反序列化）。
+     */
+    private string $rawPayload;
+
+    /**
+     * 原始 Kafka headers（含 traceparent / x-trace-id / x-attempt）。
+     *
+     * @var array<string,string>
+     */
+    private array $headers;
+
+    /**
+     * 源 topic。
+     */
+    private string $topic;
+
+    /**
+     * 源 partition。
+     */
+    private int $partition;
+
+    /**
+     * 已重试次数（0 = 首次失败）。
+     */
+    private int $attempts;
+
+    /**
      * @param string                $rawPayload 原始消息体（未反序列化）
      * @param array<string,string>  $headers    原始 Kafka headers（含 traceparent / x-trace-id / x-attempt）
      * @param string                $topic      源 topic

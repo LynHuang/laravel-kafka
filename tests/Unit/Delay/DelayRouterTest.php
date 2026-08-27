@@ -19,16 +19,16 @@ final class DelayRouterTest extends TestCase
     {
         $router = new DelayRouter([5, 30, 60, 300, 1800, 3600, 86400]);
         $result = $router->route(3);
-        $this->assertSame('delay-5s', $result['topic']);
-        $this->assertSame(5, $result['tier']);
+        self::assertSame('delay-5s', $result['topic']);
+        self::assertSame(5, $result['tier']);
     }
 
     public function testRouteToThirtySecondTier(): void
     {
         $router = new DelayRouter([5, 30, 60, 300, 1800, 3600, 86400]);
         $result = $router->route(15);
-        $this->assertSame('delay-30s', $result['topic']);
-        $this->assertSame(30, $result['tier']);
+        self::assertSame('delay-30s', $result['topic']);
+        self::assertSame(30, $result['tier']);
     }
 
     public function testRouteToExactBoundary(): void
@@ -36,8 +36,8 @@ final class DelayRouterTest extends TestCase
         $router = new DelayRouter([5, 30, 60, 300, 1800, 3600, 86400]);
         // 正好等于 tier 边界 → 落到该 tier
         $result = $router->route(60);
-        $this->assertSame('delay-60s', $result['topic']);
-        $this->assertSame(60, $result['tier']);
+        self::assertSame('delay-60s', $result['topic']);
+        self::assertSame(60, $result['tier']);
     }
 
     public function testRouteToMaxTierWhenExceeding(): void
@@ -45,8 +45,8 @@ final class DelayRouterTest extends TestCase
         $router = new DelayRouter([5, 30, 60, 300, 1800, 3600, 86400]);
         // 超过最大 tier（86400 = 1 day）→ 用最大 tier
         $result = $router->route(90000);
-        $this->assertSame('delay-86400s', $result['topic']);
-        $this->assertSame(86400, $result['tier']);
+        self::assertSame('delay-86400s', $result['topic']);
+        self::assertSame(86400, $result['tier']);
     }
 
     public function testRouteThrowsOnZeroOrNegative(): void
@@ -63,24 +63,24 @@ final class DelayRouterTest extends TestCase
     {
         $router = new DelayRouter([5, 30, 60], 'kafka-delay');
         $result = $router->route(10);
-        $this->assertSame('kafka-delay-30s', $result['topic']);
+        self::assertSame('kafka-delay-30s', $result['topic']);
     }
 
     public function testAllTopicsReturnsAllTiers(): void
     {
         $router = new DelayRouter([5, 30, 60]);
-        $this->assertSame(['delay-5s', 'delay-30s', 'delay-60s'], $router->allTopics());
+        self::assertSame(['delay-5s', 'delay-30s', 'delay-60s'], $router->allTopics());
     }
 
     public function testParseTierFromTopicName(): void
     {
         $router = new DelayRouter([5, 30, 60]);
-        $this->assertSame(5, $router->parseTier('delay-5s'));
-        $this->assertSame(30, $router->parseTier('delay-30s'));
-        $this->assertSame(60, $router->parseTier('delay-60s'));
-        $this->assertSame(0, $router->parseTier('orders-events'));
-        $this->assertSame(0, $router->parseTier('delay-5'));   // 缺 's'
-        $this->assertSame(0, $router->parseTier('delay-Xs'));   // 非数字
+        self::assertSame(5, $router->parseTier('delay-5s'));
+        self::assertSame(30, $router->parseTier('delay-30s'));
+        self::assertSame(60, $router->parseTier('delay-60s'));
+        self::assertSame(0, $router->parseTier('orders-events'));
+        self::assertSame(0, $router->parseTier('delay-5'));   // 缺 's'
+        self::assertSame(0, $router->parseTier('delay-Xs'));   // 非数字
     }
 
     public function testConstructorValidatesAscendingOrder(): void

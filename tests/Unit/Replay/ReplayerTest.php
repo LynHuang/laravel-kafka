@@ -19,17 +19,17 @@ final class ReplayerTest extends TestCase
     {
         $replayer = new Replayer();
         $window = $replayer->parseWindow('-1h', 'now');
-        $this->assertArrayHasKey('from', $window);
-        $this->assertArrayHasKey('to', $window);
-        $this->assertLessThan($window['to'], $window['from']);
+        self::assertArrayHasKey('from', $window);
+        self::assertArrayHasKey('to', $window);
+        self::assertLessThan($window['to'], $window['from']);
     }
 
     public function testParseWindowAbsoluteTimestamps(): void
     {
         $replayer = new Replayer();
         $window = $replayer->parseWindow('1700000000', '1700003600');
-        $this->assertSame(1700000000, $window['from']);
-        $this->assertSame(1700003600, $window['to']);
+        self::assertSame(1700000000, $window['from']);
+        self::assertSame(1700003600, $window['to']);
     }
 
     public function testParseWindowFromGreaterThanToThrows(): void

@@ -49,7 +49,7 @@ final class TimeWindowParser
             throw new KafkaException('TimeWindowParser value must not be empty.');
         }
 
-        $now = $now ?? time();
+        $now ??= time();
 
         // "now" → 当前时间
         if ($value === 'now') {

@@ -30,6 +30,16 @@ use LaravelKafka\Producer\Message;
 final class MessageConsuming
 {
     /**
+     * 消息来自的物理 topic（来自 header `x-original-topic`）。
+     */
+    private string $topic;
+
+    /**
+     * 消费侧包装的消息（含 header / payload）。
+     */
+    private Message $message;
+
+    /**
      * @param string $topic  消息来自的物理 topic（来自 header `x-original-topic`）
      * @param Message $message 消费侧包装的消息（含 header / payload）
      */
@@ -43,8 +53,6 @@ final class MessageConsuming
 
     /**
      * 物理 topic 名。
-     *
-     * @return string
      */
     public function topic(): string
     {
@@ -53,8 +61,6 @@ final class MessageConsuming
 
     /**
      * 消息值对象。
-     *
-     * @return Message
      */
     public function message(): Message
     {

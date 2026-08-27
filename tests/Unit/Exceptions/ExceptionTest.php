@@ -20,28 +20,28 @@ final class ExceptionTest extends TestCase
 {
     public function testAllExtendRuntimeException(): void
     {
-        $this->assertInstanceOf(RuntimeException::class, new KafkaException('k'));
-        $this->assertInstanceOf(RuntimeException::class, new SerializationException('s'));
-        $this->assertInstanceOf(RuntimeException::class, new DlqException('d'));
+        self::assertInstanceOf(RuntimeException::class, new KafkaException('k'));
+        self::assertInstanceOf(RuntimeException::class, new SerializationException('s'));
+        self::assertInstanceOf(RuntimeException::class, new DlqException('d'));
     }
 
     public function testAllExtendThrowable(): void
     {
-        $this->assertInstanceOf(Throwable::class, new KafkaException('k'));
-        $this->assertInstanceOf(Throwable::class, new SerializationException('s'));
-        $this->assertInstanceOf(Throwable::class, new DlqException('d'));
+        self::assertInstanceOf(Throwable::class, new KafkaException('k'));
+        self::assertInstanceOf(Throwable::class, new SerializationException('s'));
+        self::assertInstanceOf(Throwable::class, new DlqException('d'));
     }
 
     public function testMessageIsPreserved(): void
     {
         $e = new KafkaException('specific failure');
-        $this->assertSame('specific failure', $e->getMessage());
+        self::assertSame('specific failure', $e->getMessage());
     }
 
     public function testChainException(): void
     {
         $previous = new \RuntimeException('root cause');
         $e = new KafkaException('wrapper', 0, $previous);
-        $this->assertSame($previous, $e->getPrevious());
+        self::assertSame($previous, $e->getPrevious());
     }
 }

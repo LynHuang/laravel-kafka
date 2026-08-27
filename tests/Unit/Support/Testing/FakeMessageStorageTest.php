@@ -16,9 +16,9 @@ final class FakeMessageStorageTest extends TestCase
     public function testInitialState(): void
     {
         $storage = new FakeMessageStorage();
-        $this->assertSame(0, $storage->count());
-        $this->assertTrue($storage->isEmpty());
-        $this->assertSame([], $storage->all());
+        self::assertSame(0, $storage->count());
+        self::assertTrue($storage->isEmpty());
+        self::assertSame([], $storage->all());
     }
 
     public function testRecord(): void
@@ -28,9 +28,9 @@ final class FakeMessageStorageTest extends TestCase
 
         $storage->record('orders.created', $msg);
 
-        $this->assertSame(1, $storage->count());
-        $this->assertFalse($storage->isEmpty());
-        $this->assertSame([
+        self::assertSame(1, $storage->count());
+        self::assertFalse($storage->isEmpty());
+        self::assertSame([
             ['topic' => 'orders.created', 'message' => $msg],
         ], $storage->all());
     }
@@ -45,7 +45,7 @@ final class FakeMessageStorageTest extends TestCase
         $storage->record('topic.b', $msg2);
         $storage->record('topic.a', $msg1);
 
-        $this->assertSame(3, $storage->count());
+        self::assertSame(3, $storage->count());
     }
 
     public function testFlush(): void
@@ -56,7 +56,7 @@ final class FakeMessageStorageTest extends TestCase
 
         $storage->flush();
 
-        $this->assertSame(0, $storage->count());
-        $this->assertSame([], $storage->all());
+        self::assertSame(0, $storage->count());
+        self::assertSame([], $storage->all());
     }
 }

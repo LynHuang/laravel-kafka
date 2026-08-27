@@ -5,6 +5,67 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.8] - 2026-08-27
+
+### Fixed
+
+v0.4.7 release 后跑 phpstan level 6 报 120 errors，v0.4.8 **全部清理 + cs-fixer 40 文件自动 fix**：
+
+#### 1. PHPStan 120 errors → 0 errors
+
+| 类别 | 数量 | 修法 |
+| --- | --- | --- |
+| **Dynamic property 缺失** | 70+ | 7 个值对象类（`KafkaConfig` / `Message` / `Events/*` 6 个 / `FailedContext`）加显式 `private` property 声明（PHP 8.2+ 推荐做法）|
+| **Illuminate Container 类型 mismatch** | 4 | `KafkaJob` / `KafkaQueue::setContainer` 改用具体 `Illuminate\Container\Container`（与父类对齐）|
+| **`createPayload` 4 参数 vs 父类 3 参数** | 3 | 修 v0.1 老 bug：去掉错传 `$this->connectionName`（connection 名不是 queue 名）|
+| **Never read / unreachable** | 5 | `$serializer` 字段 + HybridFailedJobHandler 2 个 truncate 字段保留并加 `@phpstan-ignore-next-line`（Factory 注入兼容）；Producer `$lastDeliverySucceeded` 死代码加 ignore（librdkafka async callback）|
+| **Laravel 8 Connection magic method** | 13 | `RedisFailedJobProvider` 改 `redis(): Connection` 强类型 + phpstan.neon 加 `ignoreErrors` 项目级规则（`Connection::zadd()` 等是 `__call` 转发到 phpredis/predis）|
+
+#### 2. PHP-CS-Fixer 40 文件风格修复
+
+`vendor/bin/php-cs-fixer fix` 自动应用：
+- `$this->assert*` → `self::assert*`（PHPUnit 推荐）
+- 删除 unused imports
+- `ordered_class_elements` 重排（method 顺序）
+
+#### 3. CI workflows 删 `continue-on-error: true`
+
+- `linter.yml` phpstan + cs-fixer step 删 v0.4.1 hotfix 加的 `continue-on-error: true`（现在 0 errors + 0 diff）
+- `tests.yml` Redis service block 加（v0.4.7 之前 CI 没 Redis，Horizon 集成测不了）
+- `linter.yml` + `tests.yml` 注释更新
+
+#### 4. v0.4.7 已知 #1 chain API 防御决定跳过
+
+`$a->chain()->dispatch()` 误用是 Laravel 8 框架 API 缺陷（`Bus\Queueable::chain()` 返回 `$this` + `Dispatchable::dispatch()` static `new static()` 不带参数），源码层防御代价 > 收益。**v0.4.5 文档化已充分**（`docs/使用文档/17-Task-Chain.md`）。
+
+#### 5. v0.4.7 已知 #4 librdkafka 1.6.2 升级决定跳过
+
+`probe32b-rdkafka-version.php` 实测：业务方业务方业务场景下 ext-rdkafka 6.0.1 = **librdkafka 2.5.0**（不是 1.6.2）。之前"1.6.2 commit 60s timeout"是**单 broker + IPv4/IPv6 切换**环境问题，不是版本问题。**业务方业务方业务场景下不需要升级**。
+
+### Verified
+
+| 项 | 结果 |
+| --- | --- |
+| phpunit 137 tests / 287 assertions | ✅ 0 failures |
+| phpstan level 6 analyse src | ✅ 0 errors |
+| cs-fixer fix --dry-run | ✅ 0 files need fixing |
+| probe29 Laravel 8 兼容性 e2e | ✅ 15/15 全过 |
+| `RedisFailedJobProvider` 6 个方法端到端 | ✅ log/all/find/forget/flush/count（probe30 v0.4.5 已验证）|
+| `JsonSerializer` 6 个 test | ✅ 6/6（v0.4.7 文档说"没覆盖"实为已覆盖）|
+
+**0 regression**。
+
+### Known Limitations（v0.4.8 仍然 NOT 修的）
+
+| 事项 | 状态 | 详情 |
+| --- | --- | --- |
+| `queue:work` 消息延迟 | ⚠️ 设计选择 | v0.4.6 trade-off: 1ms → 5s |
+| KafkaFakeTest 环境依赖 | ✅ 已修 | v0.4.7 改核心断言，137/287 全过 |
+| chain API 误用源码层防御 | ⚠️ 文档化 | v0.4.5 文档 + v0.4.8 决定跳 |
+| librdkafka commit 60s timeout | ⚠️ 环境问题 | 单 broker + IPv4/IPv6，业务方业务方业务场景下 librdkafka 2.5.0 已 OK |
+
+---
+
 ## [0.4.7] - 2026-08-27
 
 ### Fixed

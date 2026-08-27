@@ -53,6 +53,18 @@ jobs:
           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
           KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
           KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: '0'
+      # v0.4.8: 加 Redis service (7.2-alpine 轻量, 默认无密码, 端口 6379)
+      # 用于: HorizonMetricsRecorder / RedisFailedJobProvider / queue:failed 等
+      # Redis 集成测试 (CI runner 之前没 Redis, Horizon 集成测不了)
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v5

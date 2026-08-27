@@ -7,30 +7,40 @@ namespace LaravelKafka\Events;
 use LaravelKafka\Producer\Message;
 
 /**
- * `Producer::send` 成功返回（broker 已 ack）后 dispatch。
+ * 在 `KafkaQueue::pushRaw` 调 `Producer::send` 成功后 dispatch。
  *
  * ## 业务方监听时机
  *
- * 想"这条消息已经成功落地" → 监听本事件（与 {@see MessagePublishing} 配对）。
- *
- * ## 触发点
- *
- * `KafkaQueue::pushRaw` 在 `Producer::send` 之后同步 dispatch（fake 模式**不**dispatch）。
+ * 想"消息已成功投递到 broker" → 监听本事件。
  *
  * ## 典型用途
  *
- * - metrics 计数（生产成功 / 失败的对比）
- * - 发布成功告警抑制（如果失败由 {@see MessageFailed} 单独告警）
- * - replication lag 监控（`Producer::send` 返回时已 ack，但 follower 同步可能未完成）
+ * - 投递指标（业务方 QPS / payload 大小分布）
+ * - 投递 trace span 标记
+ * - post-publish 日志
  *
- * @see \LaravelKafka\Events\MessagePublishing 配对事件
- * @see \LaravelKafka\Queue\KafkaQueue::pushRaw() 触发点
+ * ## 触发点
+ *
+ * `KafkaQueue::pushRaw` 在 `dispatchEvent(MessagePublishing)` + `Producer::send()`
+ * + `dispatchEvent(MessagePublished)` 流程最后一步同步 dispatch。
+ *
+ * @see \LaravelKafka\Events\MessagePublishing 投递前
  */
 final class MessagePublished
 {
     /**
-     * @param string $topic  物理 topic 名
-     * @param Message $message 构造好的消息（含 payload / headers / key）
+     * 消息投递到的物理 topic。
+     */
+    private string $topic;
+
+    /**
+     * 消费侧包装的消息（含 header / payload）。
+     */
+    private Message $message;
+
+    /**
+     * @param string $topic  消息投递到的物理 topic
+     * @param Message $message 消费侧包装的消息
      */
     public function __construct(
         string $topic,
@@ -42,8 +52,6 @@ final class MessagePublished
 
     /**
      * 物理 topic 名。
-     *
-     * @return string
      */
     public function topic(): string
     {
@@ -52,8 +60,6 @@ final class MessagePublished
 
     /**
      * 消息值对象。
-     *
-     * @return Message
      */
     public function message(): Message
     {

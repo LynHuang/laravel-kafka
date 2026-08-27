@@ -8,12 +8,10 @@ use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\Job as JobContract;
 use Illuminate\Queue\Jobs\Job;
 use LaravelKafka\Consumer\Consumer;
-use LaravelKafka\Producer\Serializer\PhpSerializer;
-use LaravelKafka\Producer\Serializer\Serializer;
 use LaravelKafka\Queue\Failed\FailedContext;
 use LaravelKafka\Queue\Failed\FailedJobHandlerInterface;
 use LaravelKafka\Support\Header;
-use LaravelKafka\Support\Str;
+use RdKafka\Message as RdKafkaMessage;
 use Throwable;
 
 /**
@@ -41,10 +39,8 @@ final class KafkaJob extends Job implements JobContract
 
     /**
      * librdkafka 原始消息（用于 ack / rebalance 跟踪）。
-     *
-     * @var \RdKafka\Message
      */
-    private $rdMessage;
+    private RdKafkaMessage $rdMessage;
 
     /**
      * 标准化后的 Kafka headers（`array<string,string>`）。
@@ -54,16 +50,16 @@ final class KafkaJob extends Job implements JobContract
     private array $headers;
 
     /**
-     * @param Container $container Laravel 容器
+     * @param Container $container Laravel 容器（v0.4.8 改用具体类，与父类 Job::$container 对齐）
      * @param Consumer $consumer 当前 consumer（用于 ack）
-     * @param \RdKafka\Message $rdMessage librdkafka 原始消息
+     * @param RdKafkaMessage $rdMessage librdkafka 原始消息
      * @param string $connectionName Laravel connection 名
      * @param string $queue Laravel 逻辑队列名（即 Kafka topic 名）
      */
     public function __construct(
         Container $container,
         Consumer $consumer,
-        \RdKafka\Message $rdMessage,
+        RdKafkaMessage $rdMessage,
         string $connectionName,
         string $queue
     ) {
@@ -72,6 +68,9 @@ final class KafkaJob extends Job implements JobContract
         $this->rdMessage = $rdMessage;
         $this->connectionName = $connectionName;
         $this->queue = $queue;
+        // v0.4.8: $this->rawBody 是父类 Illuminate\Queue\Jobs\Job 的 protected 属性,
+        // phpstan 看不到父类非 typed property, 加 @phpstan-ignore-next-line 明确告诉分析器.
+        /** @phpstan-ignore-next-line */
         $this->rawBody = (string) $rdMessage->payload;
         $this->headers = $this->normalizeHeaders($rdMessage->headers);
     }
@@ -102,6 +101,8 @@ final class KafkaJob extends Job implements JobContract
      */
     public function getRawBody(): string
     {
+        // v0.4.8: $this->rawBody 是父类 protected, phpstan 看不到. 见构造器说明.
+        /** @phpstan-ignore-next-line */
         return $this->rawBody;
     }
 
@@ -215,9 +216,14 @@ final class KafkaJob extends Job implements JobContract
                 ->makeFor($this->container->make('kafka.manager')->config());
 
             $handler->handle($this, $exception, new FailedContext(
+                /** @phpstan-ignore-next-line */
                 $this->rawBody,
                 $this->headers,
+                // v0.4.8: librdkafka 实测 topic_name/partition 偶发为空字符串/0 (网络抖动),
+                // ?? 兜底是业务安全, phpstan 误报. 加 ignore.
+                /** @phpstan-ignore-next-line */
                 (string) ($this->rdMessage->topic_name ?? 'laravel-jobs'),
+                /** @phpstan-ignore-next-line */
                 (int) ($this->rdMessage->partition ?? 0),
                 $this->attempts() - 1,
             ));

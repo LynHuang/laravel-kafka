@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace LaravelKafka\Tests\Unit\Queue;
 
 use LaravelKafka\Manager\KafkaManager;
-use LaravelKafka\Producer\Message;
 use LaravelKafka\Support\Testing\FakeMessageStorage;
 use LaravelKafka\Tests\TestCase;
 
@@ -30,21 +29,12 @@ final class KafkaQueueOptionsTest extends TestCase
         $this->app->instance(FakeMessageStorage::class, new FakeMessageStorage());
     }
 
-    private function pushAndAssert(callable $push, callable $assert): void
-    {
-        $manager = $this->app->make(KafkaManager::class);
-        $queue = $manager->connection();
-        $push($queue);
-        $storage = $this->app->make(FakeMessageStorage::class);
-        $assert($storage->all());
-    }
-
     // ──────── Step 3：Multi-topic 路由 ────────
 
     public function testResolveTopicFallsBackToQueueName(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'reports'),
+            fn($q) => $q->pushRaw('p', 'reports'),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertSame('reports', $records[0]['topic']);
@@ -55,7 +45,7 @@ final class KafkaQueueOptionsTest extends TestCase
     public function testResolveTopicFallsBackToDefaultWhenNoQueue(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p'),
+            fn($q) => $q->pushRaw('p'),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertSame('laravel-jobs-test', $records[0]['topic']);
@@ -66,7 +56,7 @@ final class KafkaQueueOptionsTest extends TestCase
     public function testOptionsTopicOverridesEverything(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'reports', ['topic' => 'audit.events']),
+            fn($q) => $q->pushRaw('p', 'reports', ['topic' => 'audit.events']),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertSame('audit.events', $records[0]['topic']);
@@ -77,7 +67,7 @@ final class KafkaQueueOptionsTest extends TestCase
     public function testEmptyOptionsTopicFallsBack(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'reports', ['topic' => '']),
+            fn($q) => $q->pushRaw('p', 'reports', ['topic' => '']),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertSame('reports', $records[0]['topic']);
@@ -90,7 +80,7 @@ final class KafkaQueueOptionsTest extends TestCase
     public function testPushWithoutKeyProducesNullKey(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'orders'),
+            fn($q) => $q->pushRaw('p', 'orders'),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertNull($records[0]['message']->key());
@@ -101,7 +91,7 @@ final class KafkaQueueOptionsTest extends TestCase
     public function testPushWithOptionsKey(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'orders', ['key' => 'user-42']),
+            fn($q) => $q->pushRaw('p', 'orders', ['key' => 'user-42']),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertSame('user-42', $records[0]['message']->key());
@@ -113,8 +103,7 @@ final class KafkaQueueOptionsTest extends TestCase
     {
         // KafkaQueue::push($job, $data, $queue, $key) 是 v0.2 新增的第 4 参数
         $this->pushAndAssert(
-            fn ($q) => $q->push(function () {
-            }, 'payload', 'orders', 'user-99'),
+            fn($q) => $q->push(function () {}, 'payload', 'orders', 'user-99'),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertSame('user-99', $records[0]['message']->key());
@@ -126,8 +115,7 @@ final class KafkaQueueOptionsTest extends TestCase
     {
         // 不传第 4 参数 → 行为与 v0.1 一致（key = null）
         $this->pushAndAssert(
-            fn ($q) => $q->push(function () {
-            }, 'payload', 'orders'),
+            fn($q) => $q->push(function () {}, 'payload', 'orders'),
             function (array $records) {
                 $this->assertCount(1, $records);
                 $this->assertNull($records[0]['message']->key());
@@ -140,7 +128,7 @@ final class KafkaQueueOptionsTest extends TestCase
     public function testPushWritesW3CTraceparent(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'orders'),
+            fn($q) => $q->pushRaw('p', 'orders'),
             function (array $records) {
                 $tp = $records[0]['message']->header('traceparent');
                 $this->assertNotNull($tp);
@@ -155,7 +143,7 @@ final class KafkaQueueOptionsTest extends TestCase
     public function testPushAlsoWritesShortXTraceIdForBackwardCompat(): void
     {
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'orders'),
+            fn($q) => $q->pushRaw('p', 'orders'),
             function (array $records) {
                 $short = $records[0]['message']->header('x-trace-id');
                 $tp = $records[0]['message']->header('traceparent');
@@ -171,10 +159,19 @@ final class KafkaQueueOptionsTest extends TestCase
     {
         $tp = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
         $this->pushAndAssert(
-            fn ($q) => $q->pushRaw('p', 'orders', ['traceparent' => $tp]),
+            fn($q) => $q->pushRaw('p', 'orders', ['traceparent' => $tp]),
             function (array $records) use ($tp) {
                 $this->assertSame($tp, $records[0]['message']->header('traceparent'));
             }
         );
+    }
+
+    private function pushAndAssert(callable $push, callable $assert): void
+    {
+        $manager = $this->app->make(KafkaManager::class);
+        $queue = $manager->connection();
+        $push($queue);
+        $storage = $this->app->make(FakeMessageStorage::class);
+        $assert($storage->all());
     }
 }

@@ -95,7 +95,7 @@ final class KafkaManager
      */
     public function connection(?string $name = null): Queue
     {
-        $name = $name ?? $this->getDefaultConnection();
+        $name ??= $this->getDefaultConnection();
 
         if (! isset($this->connections[$name])) {
             $config = $this->resolveConfig($name);
@@ -116,7 +116,7 @@ final class KafkaManager
      */
     public function config(?string $name = null): KafkaConfig
     {
-        $name = $name ?? $this->getDefaultConnection();
+        $name ??= $this->getDefaultConnection();
         if (! isset($this->configs[$name])) {
             $this->resolveConfig($name);
         }
@@ -142,7 +142,7 @@ final class KafkaManager
      */
     public function disconnect(?string $name = null): void
     {
-        $name = $name ?? $this->getDefaultConnection();
+        $name ??= $this->getDefaultConnection();
         unset($this->connections[$name], $this->configs[$name]);
     }
 

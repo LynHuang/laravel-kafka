@@ -34,6 +34,33 @@ namespace LaravelKafka\Producer;
 final class Message
 {
     /**
+     * 消息体（已序列化）。
+     */
+    private string $payload;
+
+    /**
+     * Kafka headers（key-value）。
+     *
+     * @var array<string,string>
+     */
+    private array $headers;
+
+    /**
+     * 路由键；同 key 永远落同分区。
+     */
+    private ?string $key;
+
+    /**
+     * 显式指定 partition（**生产侧不推荐**，broker 负载均衡失效）。
+     */
+    private ?int $partition;
+
+    /**
+     * 消息时间戳（ms）；null = broker 当前时间。
+     */
+    private ?int $timestampMs;
+
+    /**
      * @param string                $payload    消息体（已序列化）
      * @param array<string,string>  $headers    Kafka headers
      * @param string|null           $key        路由键；同 key 永远落同分区

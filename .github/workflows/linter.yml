@@ -39,12 +39,8 @@ jobs:
           composer update --prefer-dist --no-interaction
 
       - name: Check style
-        # v0.4.1 round 7: PHP-CS-Fixer 3.95 在 PHP 8.1 上对 src/ + tests/ 共 40 个文件
-        # 提出代码风格修复 (e.g. $this->assert* → self::assert*, 删除 unused imports,
-        # ordered_class_elements 重排方法). 这些 diff 在 PHP 7.4 上都合法 (除了已修的
-        # trailing_comma), 但 cs-fixer --dry-run 模式发现任何待修即 exit 8.
-        # 业务代码应用 cs-fixer 修复属 v0.5 范围 (与 PHPStan 业务代码 120 errors 同处理).
-        continue-on-error: true
+        # v0.4.8: PHP-CS-Fixer 3.75 自动 fix 40 文件后, 现在 0 diff. 删 v0.4.1 hotfix
+        # 加的 continue-on-error, 让 cs-fixer 真 fail 时 CI 卡住.
         run: vendor/bin/php-cs-fixer fix --dry-run --diff
 
   phpstan:
@@ -79,9 +75,6 @@ jobs:
           composer update --prefer-dist --no-interaction
 
       - name: Run phpstan
-        # v0.4.1 round 7: PHPStan 120 errors 来自 src/ 业务代码历史问题
-        # (dynamic properties / never-read / visibility / createPayload 参数),
-        # 不属于 v0.4.1 (CI 修复) 范围, v0.5 待办清理.
-        # 保留 step 跑作为信息, 不再 fail CI.
-        continue-on-error: true
+        # v0.4.8: PHPStan 0 errors (之前 120 errors v0.4.1 已知全清, RedisFailedJobProvider
+        # magic method 走 phpstan.neon ignoreErrors). 删 v0.4.1 hotfix 加的 continue-on-error.
         run: vendor/bin/phpstan analyse src --no-progress

@@ -17,14 +17,14 @@ final class PhpSerializerTest extends TestCase
     {
         $s = new PhpSerializer();
         $encoded = $s->encode('hello');
-        $this->assertSame('hello', $s->decode($encoded));
+        self::assertSame('hello', $s->decode($encoded));
     }
 
     public function testEncodeDecodeArray(): void
     {
         $s = new PhpSerializer();
         $data = ['a' => 1, 'b' => ['nested' => true]];
-        $this->assertSame($data, $s->decode($s->encode($data)));
+        self::assertSame($data, $s->decode($s->encode($data)));
     }
 
     public function testEncodeDecodeObject(): void
@@ -35,13 +35,13 @@ final class PhpSerializerTest extends TestCase
         $encoded = $s->encode($obj);
         /** @var \stdClass $decoded */
         $decoded = $s->decode($encoded);
-        $this->assertSame(42, $decoded->x);
+        self::assertSame(42, $decoded->x);
     }
 
     public function testDecodeEmptyString(): void
     {
         $s = new PhpSerializer();
-        $this->assertNull($s->decode(''));
+        self::assertNull($s->decode(''));
     }
 
     public function testDecodeInvalidPayloadThrows(): void
@@ -54,6 +54,6 @@ final class PhpSerializerTest extends TestCase
     public function testName(): void
     {
         $s = new PhpSerializer();
-        $this->assertSame('php', $s->name());
+        self::assertSame('php', $s->name());
     }
 }

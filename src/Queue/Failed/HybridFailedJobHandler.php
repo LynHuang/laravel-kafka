@@ -61,8 +61,18 @@ final class HybridFailedJobHandler implements FailedJobHandlerInterface
      */
     private array $fatalExceptions;
 
+    /**
+     * v0.4.8: 业务方 Hybrid 通过透传这两个截断字节给 {@see DlqFailedJobHandler} (工厂注入时
+     * dlq 已持相同值). 字段保留仅为 API 兼容 (FailedJobHandlerFactory::makeHybrid 仍传),
+     * 当前 read 实际从 $this->dlq 内部拿, 加 @phpstan-ignore-next-line 明确.
+     *
+     * @phpstan-ignore-next-line
+     */
     private int $traceTruncateBytes;
 
+    /**
+     * @phpstan-ignore-next-line
+     */
     private int $messageTruncateBytes;
 
     /**

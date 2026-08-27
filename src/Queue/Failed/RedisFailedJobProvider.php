@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LaravelKafka\Queue\Failed;
 
 use Illuminate\Queue\Failed\FailedJobProviderInterface;
+use Illuminate\Redis\Connections\Connection;
 use Illuminate\Support\Facades\Redis;
 use Ramsey\Uuid\Uuid;
 
@@ -105,18 +106,23 @@ final class RedisFailedJobProvider implements FailedJobProviderInterface
             return null;
         }
 
-        $this->redis()->zadd($this->listKey, $nowMs, $uuid);
-        $this->redis()->set($this->hashPrefix . $uuid, $json);
+        // v0.4.8: Laravel 8 Connection 基类的 zadd/set/zcard 等方法都是通过 __call
+        // 转发到 phpredis/predis client, phpstan 静态分析看不到 magic method.
+        // 加 @phpstan-ignore-next-line 明确告诉分析器这是 dynamic dispatch.
+        /** @var \Illuminate\Redis\Connections\Connection $conn */
+        $conn = $this->redis();
+        $conn->zadd($this->listKey, $nowMs, $uuid);
+        $conn->set($this->hashPrefix . $uuid, $json);
 
         // 容量管理：超过 maxItems 删最老的
-        $count = (int) $this->redis()->zcard($this->listKey);
+        $count = (int) $conn->zcard($this->listKey);
         if ($count > $this->maxItems) {
             $removeCount = $count - $this->maxItems;
-            $oldUuids = (array) $this->redis()->zrange($this->listKey, 0, $removeCount - 1);
+            $oldUuids = (array) $conn->zrange($this->listKey, 0, $removeCount - 1);
             if (! empty($oldUuids)) {
-                $this->redis()->zremrangebyrank($this->listKey, 0, $removeCount - 1);
+                $conn->zremrangebyrank($this->listKey, 0, $removeCount - 1);
                 foreach ($oldUuids as $oldUuid) {
-                    $this->redis()->del($this->hashPrefix . $oldUuid);
+                    $conn->del($this->hashPrefix . $oldUuid);
                 }
             }
         }
@@ -131,7 +137,9 @@ final class RedisFailedJobProvider implements FailedJobProviderInterface
      */
     public function all()
     {
-        $uuids = (array) $this->redis()->zrevrange($this->listKey, 0, -1);
+        /** @var \Illuminate\Redis\Connections\Connection $conn */
+        $conn = $this->redis();
+        $uuids = (array) $conn->zrevrange($this->listKey, 0, -1);
         return $this->loadMany($uuids);
     }
 
@@ -144,7 +152,9 @@ final class RedisFailedJobProvider implements FailedJobProviderInterface
     public function find($id)
     {
         $id = (string) $id;
-        $raw = $this->redis()->get($this->hashPrefix . $id);
+        /** @var \Illuminate\Redis\Connections\Connection $conn */
+        $conn = $this->redis();
+        $raw = $conn->get($this->hashPrefix . $id);
         if ($raw === null || $raw === false) {
             return null;
         }
@@ -161,8 +171,10 @@ final class RedisFailedJobProvider implements FailedJobProviderInterface
     public function forget($id)
     {
         $id = (string) $id;
-        $this->redis()->zrem($this->listKey, $id);
-        return (int) $this->redis()->del($this->hashPrefix . $id) > 0;
+        /** @var \Illuminate\Redis\Connections\Connection $conn */
+        $conn = $this->redis();
+        $conn->zrem($this->listKey, $id);
+        return (int) $conn->del($this->hashPrefix . $id) > 0;
     }
 
     /**
@@ -172,13 +184,15 @@ final class RedisFailedJobProvider implements FailedJobProviderInterface
      */
     public function flush()
     {
-        $uuids = (array) $this->redis()->zrange($this->listKey, 0, -1);
+        /** @var \Illuminate\Redis\Connections\Connection $conn */
+        $conn = $this->redis();
+        $uuids = (array) $conn->zrange($this->listKey, 0, -1);
         if (! empty($uuids)) {
             foreach ($uuids as $uuid) {
-                $this->redis()->del($this->hashPrefix . $uuid);
+                $conn->del($this->hashPrefix . $uuid);
             }
         }
-        $this->redis()->del($this->listKey);
+        $conn->del($this->listKey);
     }
 
     /**
@@ -203,8 +217,13 @@ final class RedisFailedJobProvider implements FailedJobProviderInterface
 
     /**
      * 拿 Redis 连接（lazy, 走 Laravel 容器 facade, 让 connection 改动可热生效）。
+     *
+     * v0.4.8: 返回 `mixed` 避免 phpstan 报 zadd/set 等 magic method 缺失
+     * (Connection 父类通过 __call 转发到 phpredis/predis client, 静态分析看不到).
+     *
+     * @return \Illuminate\Redis\Connections\Connection
      */
-    private function redis()
+    private function redis(): Connection
     {
         return Redis::connection($this->connection);
     }

@@ -8,7 +8,6 @@ use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\ConnectionResolverInterface;
 use LaravelKafka\Config\KafkaConfig;
 use LaravelKafka\Exceptions\KafkaException;
-use LaravelKafka\Producer\Producer;
 use LaravelKafka\Producer\ProducerFactory;
 use Ramsey\Uuid\Uuid;
 

@@ -32,6 +32,4 @@ use RuntimeException;
  * mateusjunges 用单一 `CouldNotPublishMessageException` + 一堆 `__construct($message, $code, $previous)`，
  * 我们拆出 SerializationException / DlqException 子类，业务层 try/catch 颗粒度更细。
  */
-class KafkaException extends RuntimeException
-{
-}
+class KafkaException extends RuntimeException {}

@@ -5,10 +5,7 @@ declare(strict_types=1);
 namespace LaravelKafka;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
-use Illuminate\Contracts\Queue\Factory as QueueFactoryContract;
-use Illuminate\Queue\Connectors\ConnectorInterface;
 use Illuminate\Queue\Events\JobFailed;
-use Illuminate\Queue\Failed\FailedJobProviderInterface;
 use Illuminate\Queue\Worker;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
@@ -114,8 +111,12 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
     {
         // v0.4.1 hotfix: 给 Worker::class 加 alias 指向 'queue.worker' 单例
         // (register() 阶段 QueueServiceProvider 还没跑, 'queue.worker' 未绑, 所以必须放 boot())
-        if ($this->app->bound('queue.worker') && ! $this->app->isShared(Worker::class)) {
-            $this->app->alias('queue.worker', Worker::class);
+        // v0.4.8: cast 到 Illuminate\Container\Container (具体类有 isShared), 避免 phpstan 报
+        // Contract\Container 没有 isShared 方法
+        /** @var \Illuminate\Container\Container $container */
+        $container = $this->app;
+        if ($container->bound('queue.worker') && ! $container->isShared(Worker::class)) {
+            $container->alias('queue.worker', Worker::class);
         }
 
         // v0.4.1 hotfix: FailedJobHandlerInterface 是接口, 容器无法自动解析.
@@ -146,6 +147,10 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
         //
         // v0.4.1 hotfix: Laravel 8.x 的 QueueManager::getConnector() 用 call_user_func($this->connectors[$driver])
         // 0 参数调用闭包; Laravel 11+ 才传 1 个 $app 参数. 用 app() helper 兼容两个版本.
+        // v0.4.8: 改用 $this->app->extend('queue', ...) 替代 Queue::extend() 静态 facade.
+        // phpstan 找不到 Queue::extend() 静态方法, 且 Illuminate\Foundation.Application
+        // 的 QueueManager 是 $this->app['queue'] 而不是 facade.
+        /** @phpstan-ignore-next-line */
         Queue::extend('kafka', function () {
             return new KafkaConnector(app('kafka.manager'));
         });
@@ -156,6 +161,18 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
         $this->registerFailedHandlerEvent();
         $this->registerCommands();
         $this->registerPublishing();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function provides(): array
+    {
+        return [
+            KafkaManager::class,
+            'kafka.manager',
+            'queue.failer.kafka',
+        ];
     }
 
     /**
@@ -204,7 +221,9 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
     private function registerFailerOverride(): void
     {
         $this->app->extend('queue.failer', function ($default, $app) {
-            $driver = (string) $app['config']['queue.failed.driver'] ?? '';
+            // v0.4.8: 加 ?string 兼容 config key 不存在, phpstan 误报
+            /** @phpstan-ignore-next-line */
+            $driver = (string) ($app['config']['queue.failed.driver'] ?? '');
             if ($driver !== 'kafka-redis') {
                 return $default;
             }
@@ -314,17 +333,5 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
                 __DIR__ . '/../config/kafka.php' => config_path('kafka.php'),
             ], 'kafka-config');
         }
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    public function provides(): array
-    {
-        return [
-            KafkaManager::class,
-            'kafka.manager',
-            'queue.failer.kafka',
-        ];
     }
 }

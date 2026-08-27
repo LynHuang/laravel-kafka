@@ -31,8 +31,8 @@ final class EventTest extends TestCase
         $msg = new Message('payload');
         $event = new MessagePublishing('orders.created', $msg);
 
-        $this->assertSame('orders.created', $event->topic());
-        $this->assertSame($msg, $event->message());
+        self::assertSame('orders.created', $event->topic());
+        self::assertSame($msg, $event->message());
     }
 
     public function testMessagePublished(): void
@@ -40,8 +40,8 @@ final class EventTest extends TestCase
         $msg = new Message('payload');
         $event = new MessagePublished('orders.created', $msg);
 
-        $this->assertSame('orders.created', $event->topic());
-        $this->assertSame($msg, $event->message());
+        self::assertSame('orders.created', $event->topic());
+        self::assertSame($msg, $event->message());
     }
 
     public function testMessageConsuming(): void
@@ -49,8 +49,8 @@ final class EventTest extends TestCase
         $msg = new Message('payload');
         $event = new MessageConsuming('orders.created', $msg);
 
-        $this->assertSame('orders.created', $event->topic());
-        $this->assertSame($msg, $event->message());
+        self::assertSame('orders.created', $event->topic());
+        self::assertSame($msg, $event->message());
     }
 
     public function testMessageConsumed(): void
@@ -58,8 +58,8 @@ final class EventTest extends TestCase
         $msg = new Message('payload');
         $event = new MessageConsumed('orders.created', $msg);
 
-        $this->assertSame('orders.created', $event->topic());
-        $this->assertSame($msg, $event->message());
+        self::assertSame('orders.created', $event->topic());
+        self::assertSame($msg, $event->message());
     }
 
     public function testMessageFailed(): void
@@ -68,9 +68,9 @@ final class EventTest extends TestCase
         $error = new \RuntimeException('boom');
         $event = new MessageFailed('orders.created', $msg, $error);
 
-        $this->assertSame('orders.created', $event->topic());
-        $this->assertSame($msg, $event->message());
-        $this->assertSame($error, $event->error());
+        self::assertSame('orders.created', $event->topic());
+        self::assertSame($msg, $event->message());
+        self::assertSame($error, $event->error());
     }
 
     public function testMessageSentToDLQ(): void
@@ -79,15 +79,15 @@ final class EventTest extends TestCase
         $error = new \RuntimeException('boom');
         $event = new MessageSentToDLQ('orders.created.dlq', $msg, $error);
 
-        $this->assertSame('orders.created.dlq', $event->dlqTopic());
-        $this->assertSame($msg, $event->message());
-        $this->assertSame($error, $event->error());
+        self::assertSame('orders.created.dlq', $event->dlqTopic());
+        self::assertSame($msg, $event->message());
+        self::assertSame($error, $event->error());
     }
 
     public function testEventsAreFinalAndReadonly(): void
     {
         // 通过反射验证 final
         $reflection = new \ReflectionClass(MessagePublishing::class);
-        $this->assertTrue($reflection->isFinal());
+        self::assertTrue($reflection->isFinal());
     }
 }

@@ -19,48 +19,48 @@ final class TimeWindowParserTest extends TestCase
     {
         $parser = new TimeWindowParser();
         $now = 1700000000;
-        $this->assertSame($now, $parser->parse('now', $now));
+        self::assertSame($now, $parser->parse('now', $now));
     }
 
     public function testParseRelativeHours(): void
     {
         $parser = new TimeWindowParser();
         $now = 1700000000;
-        $this->assertSame($now - 3600, $parser->parse('-1h', $now));
+        self::assertSame($now - 3600, $parser->parse('-1h', $now));
     }
 
     public function testParseRelativeMinutes(): void
     {
         $parser = new TimeWindowParser();
         $now = 1700000000;
-        $this->assertSame($now - 30 * 60, $parser->parse('-30m', $now));
+        self::assertSame($now - 30 * 60, $parser->parse('-30m', $now));
     }
 
     public function testParseRelativeDays(): void
     {
         $parser = new TimeWindowParser();
         $now = 1700000000;
-        $this->assertSame($now - 7 * 86400, $parser->parse('-7d', $now));
+        self::assertSame($now - 7 * 86400, $parser->parse('-7d', $now));
     }
 
     public function testParseRelativeSeconds(): void
     {
         $parser = new TimeWindowParser();
         $now = 1700000000;
-        $this->assertSame($now - 60, $parser->parse('-60s', $now));
+        self::assertSame($now - 60, $parser->parse('-60s', $now));
     }
 
     public function testParseAbsoluteTimestamp(): void
     {
         $parser = new TimeWindowParser();
-        $this->assertSame(1700000000, $parser->parse('1700000000'));
+        self::assertSame(1700000000, $parser->parse('1700000000'));
     }
 
     public function testParseAbsoluteDateString(): void
     {
         $parser = new TimeWindowParser();
         $ts = $parser->parse('2026-08-25 10:00:00');
-        $this->assertIsInt($ts);
+        self::assertIsInt($ts);
         // 2026-08-25 10:00:00 UTC = 1756111200（依赖时区，但肯定是 int）
     }
 
@@ -83,6 +83,6 @@ final class TimeWindowParserTest extends TestCase
     {
         $parser = new TimeWindowParser();
         $now = 1700000000;
-        $this->assertSame($now, $parser->parse('  now  ', $now));
+        self::assertSame($now, $parser->parse('  now  ', $now));
     }
 }

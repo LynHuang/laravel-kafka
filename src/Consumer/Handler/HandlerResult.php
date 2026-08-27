@@ -64,20 +64,6 @@ final class HandlerResult
     private ?\Throwable $error;
 
     /**
-     * @param string $action 三个 action 常量之一
-     * @param \Throwable|null $error 原始异常（ack 时 null）
-     * @throws \InvalidArgumentException 非法 action 字符串时
-     */
-    public function __construct(string $action, ?\Throwable $error = null)
-    {
-        if (! in_array($action, [self::ACTION_ACK, self::ACTION_REQUEUE, self::ACTION_DLQ], true)) {
-            throw new \InvalidArgumentException(sprintf('Invalid handler action: %s', $action));
-        }
-        $this->action = $action;
-        $this->error = $error;
-    }
-
-    /**
      * 处理成功：提交 offset。
      *
      * 业务方在 try 块正常返回时调用。
@@ -113,6 +99,20 @@ final class HandlerResult
     public static function dlq(\Throwable $error): self
     {
         return new self(self::ACTION_DLQ, $error);
+    }
+
+    /**
+     * @param string $action 三个 action 常量之一
+     * @param \Throwable|null $error 原始异常（ack 时 null）
+     * @throws \InvalidArgumentException 非法 action 字符串时
+     */
+    public function __construct(string $action, ?\Throwable $error = null)
+    {
+        if (! in_array($action, [self::ACTION_ACK, self::ACTION_REQUEUE, self::ACTION_DLQ], true)) {
+            throw new \InvalidArgumentException(sprintf('Invalid handler action: %s', $action));
+        }
+        $this->action = $action;
+        $this->error = $error;
     }
 
     /**

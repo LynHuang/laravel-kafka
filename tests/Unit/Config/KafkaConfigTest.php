@@ -20,11 +20,11 @@ final class KafkaConfigTest extends TestCase
             'queue' => 'jobs',
         ]);
 
-        $this->assertSame('default', $cfg->name());
-        $this->assertSame('localhost:9092', $cfg->brokers());
-        $this->assertSame('jobs', $cfg->defaultTopic());
-        $this->assertSame('laravel-kafka', $cfg->clientId());
-        $this->assertSame('PLAINTEXT', $cfg->protocol());
+        self::assertSame('default', $cfg->name());
+        self::assertSame('localhost:9092', $cfg->brokers());
+        self::assertSame('jobs', $cfg->defaultTopic());
+        self::assertSame('laravel-kafka', $cfg->clientId());
+        self::assertSame('PLAINTEXT', $cfg->protocol());
     }
 
     public function testEmptyBrokersThrows(): void
@@ -59,7 +59,7 @@ final class KafkaConfigTest extends TestCase
             'queue' => 'jobs',
             'topics' => ['emails' => 'app.emails'],
         ]);
-        $this->assertSame('app.emails', $cfg->resolveTopic('emails'));
+        self::assertSame('app.emails', $cfg->resolveTopic('emails'));
     }
 
     public function testResolveTopicFallsBackToName(): void
@@ -68,7 +68,7 @@ final class KafkaConfigTest extends TestCase
             'brokers' => 'x:9092',
             'queue' => 'jobs',
         ]);
-        $this->assertSame('reports', $cfg->resolveTopic('reports'));
+        self::assertSame('reports', $cfg->resolveTopic('reports'));
     }
 
     public function testResolveTopicFallsBackToDefault(): void
@@ -77,8 +77,8 @@ final class KafkaConfigTest extends TestCase
             'brokers' => 'x:9092',
             'queue' => 'jobs',
         ]);
-        $this->assertSame('jobs', $cfg->resolveTopic(null));
-        $this->assertSame('jobs', $cfg->resolveTopic(''));
+        self::assertSame('jobs', $cfg->resolveTopic(null));
+        self::assertSame('jobs', $cfg->resolveTopic(''));
     }
 
     public function testToProducerRdKafkaConfig(): void
@@ -94,12 +94,12 @@ final class KafkaConfigTest extends TestCase
             ],
         ]);
         $conf = $cfg->toProducerRdKafkaConfig();
-        $this->assertSame('localhost:9092', $conf['bootstrap.servers']);
-        $this->assertSame('app-1', $conf['client.id']);
+        self::assertSame('localhost:9092', $conf['bootstrap.servers']);
+        self::assertSame('app-1', $conf['client.id']);
         // v0.4.3 hotfix: 业务方友好名 -> librdkafka 原生名 (compression.type / linger.ms / enable.idempotence)
-        $this->assertSame('gzip', $conf['compression.type']);
-        $this->assertSame('10', $conf['linger.ms']);
-        $this->assertSame('true', $conf['enable.idempotence']);
+        self::assertSame('gzip', $conf['compression.type']);
+        self::assertSame('10', $conf['linger.ms']);
+        self::assertSame('true', $conf['enable.idempotence']);
     }
 
     public function testToConsumerRdKafkaConfig(): void
@@ -113,9 +113,9 @@ final class KafkaConfigTest extends TestCase
             ],
         ]);
         $conf = $cfg->toConsumerRdKafkaConfig();
-        $this->assertSame('g-1', $conf['group.id']);
-        $this->assertSame('false', $conf['enable.auto.commit']);
-        $this->assertSame('earliest', $conf['auto.offset.reset']);
+        self::assertSame('g-1', $conf['group.id']);
+        self::assertSame('false', $conf['enable.auto.commit']);
+        self::assertSame('earliest', $conf['auto.offset.reset']);
     }
 
     public function testSaslConfigInjected(): void
@@ -131,9 +131,9 @@ final class KafkaConfigTest extends TestCase
             ],
         ]);
         $conf = $cfg->toProducerRdKafkaConfig();
-        $this->assertSame('SASL_PLAINTEXT', $conf['security.protocol']);
-        $this->assertSame('PLAIN', $conf['sasl.mechanism']);
-        $this->assertSame('u', $conf['sasl.username']);
-        $this->assertSame('p', $conf['sasl.password']);
+        self::assertSame('SASL_PLAINTEXT', $conf['security.protocol']);
+        self::assertSame('PLAIN', $conf['sasl.mechanism']);
+        self::assertSame('u', $conf['sasl.username']);
+        self::assertSame('p', $conf['sasl.password']);
     }
 }

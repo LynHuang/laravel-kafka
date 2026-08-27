@@ -42,10 +42,10 @@ final class ConsumerBatchTest extends TestCase
         $consumer = new Consumer($rdConsumer, new Subscription(['test']));
         $messages = $consumer->pollBatch(3, 5000);
 
-        $this->assertCount(3, $messages);
-        $this->assertSame('msg-1', $messages[0]->payload());
-        $this->assertSame('msg-2', $messages[1]->payload());
-        $this->assertSame('msg-3', $messages[2]->payload());
+        self::assertCount(3, $messages);
+        self::assertSame('msg-1', $messages[0]->payload());
+        self::assertSame('msg-2', $messages[1]->payload());
+        self::assertSame('msg-3', $messages[2]->payload());
     }
 
     public function testPollBatchEarlyReturnOnTimedOutAfterFirstMessage(): void
@@ -64,8 +64,8 @@ final class ConsumerBatchTest extends TestCase
         $consumer = new Consumer($rdConsumer, new Subscription(['test']));
         $messages = $consumer->pollBatch(50, 5000);
 
-        $this->assertCount(1, $messages);
-        $this->assertSame('first-msg', $messages[0]->payload());
+        self::assertCount(1, $messages);
+        self::assertSame('first-msg', $messages[0]->payload());
     }
 
     public function testPollBatchReturnsEmptyOnAllTimeout(): void
@@ -84,7 +84,7 @@ final class ConsumerBatchTest extends TestCase
         $consumer = new Consumer($rdConsumer, new Subscription(['test']));
         $messages = $consumer->pollBatch(10, 5000);
 
-        $this->assertSame([], $messages);
+        self::assertSame([], $messages);
     }
 
     public function testPollBatchStopsAfterMaxReached(): void
@@ -103,7 +103,7 @@ final class ConsumerBatchTest extends TestCase
         $consumer = new Consumer($rdConsumer, new Subscription(['test']));
         $messages = $consumer->pollBatch(2, 5000);
 
-        $this->assertCount(2, $messages);
+        self::assertCount(2, $messages);
     }
 
     public function testPollBatchThrowsOnInvalidMax(): void
@@ -143,7 +143,7 @@ final class ConsumerBatchTest extends TestCase
         $consumer->commitBatch();
 
         // Mockery 自动验证 shouldReceive('commitAsync')->once()
-        $this->assertTrue(true);
+        self::assertTrue(true);
     }
 
     /**

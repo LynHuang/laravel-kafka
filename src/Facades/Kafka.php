@@ -54,19 +54,6 @@ use LaravelKafka\Support\Testing\KafkaFake;
 final class Kafka extends Facade
 {
     /**
-     * 返回 facade 背后的容器 key / 类名。
-     *
-     * 这里返回 `KafkaManager::class`，ServiceProvider 已在 `register()` 阶段
-     * 用 `$this->app->alias(KafkaManager::class, 'kafka.manager')` 注册别名。
-     *
-     * @return string
-     */
-    protected static function getFacadeAccessor()
-    {
-        return KafkaManager::class;
-    }
-
-    /**
      * 启用 fake 模式（v0.2 引入，借鉴 mateusjunges 的 `Kafka::fake()`）。
      *
      * ## 流程
@@ -107,5 +94,17 @@ final class Kafka extends Facade
         $app->make(KafkaManager::class)->fake();
 
         return new KafkaFake($storage);
+    }
+    /**
+     * 返回 facade 背后的容器 key / 类名。
+     *
+     * 这里返回 `KafkaManager::class`，ServiceProvider 已在 `register()` 阶段
+     * 用 `$this->app->alias(KafkaManager::class, 'kafka.manager')` 注册别名。
+     *
+     * @return string
+     */
+    protected static function getFacadeAccessor()
+    {
+        return KafkaManager::class;
     }
 }

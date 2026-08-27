@@ -52,7 +52,7 @@ final class ConsumerFactory
     {
         $key = $config->name();
         if (! isset($this->instances[$key])) {
-            $subscription = $subscription ?? new Subscription([$config->defaultTopic()]);
+            $subscription ??= new Subscription([$config->defaultTopic()]);
             $this->instances[$key] = $this->build($config, $subscription);
         }
         return $this->instances[$key];

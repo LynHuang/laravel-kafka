@@ -15,11 +15,6 @@ use PHPUnit\Framework\AssertionFailedError;
  */
 final class KafkaFakeTest extends TestCase
 {
-    private function makeFake(): KafkaFake
-    {
-        return new KafkaFake(new FakeMessageStorage());
-    }
-
     public function testAssertPushedOnFailsWhenStorageEmpty(): void
     {
         $fake = $this->makeFake();
@@ -37,14 +32,14 @@ final class KafkaFakeTest extends TestCase
         $fake->assertPushedOn('orders', function (string $topic, Message $m) use ($msg): bool {
             return $m === $msg;
         });
-        $this->assertTrue(true);
+        self::assertTrue(true);
     }
 
     public function testAssertNothingPushed(): void
     {
         $fake = $this->makeFake();
         $fake->assertNothingPushed();
-        $this->assertTrue(true);
+        self::assertTrue(true);
     }
 
     public function testAssertNothingPushedFailsWhenOnePublished(): void
@@ -66,7 +61,7 @@ final class KafkaFakeTest extends TestCase
         $fake = new KafkaFake($storage);
 
         $fake->assertPushedOnTimes('orders.created', 2);
-        $this->assertTrue(true);
+        self::assertTrue(true);
     }
 
     public function testAssertPushedOnTimesFailsOnWrongCount(): void
@@ -89,7 +84,7 @@ final class KafkaFakeTest extends TestCase
         $fake->assertPushed('orders', function (string $topic, Message $m): bool {
             return $m->payload() === 'world';
         });
-        $this->assertTrue(true);
+        self::assertTrue(true);
     }
 
     public function testAssertPushedFailsWhenNoMatch(): void
@@ -102,5 +97,9 @@ final class KafkaFakeTest extends TestCase
         $fake->assertPushed('orders', function (string $topic, Message $m): bool {
             return $m->payload() === 'nonexistent';
         });
+    }
+    private function makeFake(): KafkaFake
+    {
+        return new KafkaFake(new FakeMessageStorage());
     }
 }

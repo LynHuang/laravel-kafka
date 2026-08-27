@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace LaravelKafka\Console;
 
 use Illuminate\Console\Command;
-use LaravelKafka\Horizon\HorizonMetricsRecorder;
-use LaravelKafka\Horizon\HorizonSnapshot;
 
 /**
  * `php artisan kafka:horizon:snapshot` 命令（v0.4）。

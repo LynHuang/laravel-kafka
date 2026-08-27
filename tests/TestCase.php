@@ -6,7 +6,6 @@ namespace LaravelKafka\Tests;
 
 use LaravelKafka\LaravelKafkaServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
-use Ramsey\Uuid\Uuid;
 
 /**
  * 单元测试基类。

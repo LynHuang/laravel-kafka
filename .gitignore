@@ -49,3 +49,6 @@ LaravelKafka*.md
 /docs/开发日志*.md
 /diagrams/*
 /laravel-test/
+
+# v0.4.8 临时探针脚本 (librdkafka 版本探测, 业务方业务方业务场景下 #4 不需修)
+/probe3*b-rdkafka*.php

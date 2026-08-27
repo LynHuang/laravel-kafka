@@ -28,6 +28,4 @@ use RuntimeException;
  *
  * mateusjunges 把序列化错误混在 `KafkaException` 里，颗粒度粗；我们独立成类，方便配置 fatal 列表。
  */
-class SerializationException extends RuntimeException
-{
-}
+class SerializationException extends RuntimeException {}

@@ -5,22 +5,20 @@ declare(strict_types=1);
 namespace LaravelKafka\Consumer\Handler;
 
 use Illuminate\Contracts\Container\Container;
-use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Events\Dispatcher;
-use Illuminate\Contracts\Queue\Job as JobContract;
-use Illuminate\Contracts\Queue\Queue as QueueContract;
 use Illuminate\Queue\Worker;
 use Illuminate\Queue\WorkerOptions;
 use LaravelKafka\Events\MessageConsumed;
 use LaravelKafka\Events\MessageConsuming;
 use LaravelKafka\Events\MessageFailed;
 use LaravelKafka\Exceptions\KafkaException;
+use LaravelKafka\Horizon\HorizonMetricsRecorder;
 use LaravelKafka\Producer\Message;
 use LaravelKafka\Producer\Serializer\PhpSerializer;
 use LaravelKafka\Producer\Serializer\Serializer;
+use LaravelKafka\Queue\Failed\FailedJobHandlerInterface;
 use LaravelKafka\Queue\KafkaJob;
 use LaravelKafka\Queue\KafkaQueue;
-use LaravelKafka\Queue\Failed\FailedJobHandlerInterface;
 use LaravelKafka\Support\Header;
 use Throwable;
 
@@ -73,8 +71,13 @@ final class NativeHandler implements HandlerInterface
     /**
      * Payload 反序列化器（默认 PhpSerializer）。
      *
+     * v0.4.8 保留字段: 构造器仍接 Serializer (v0.2 接口兼容), 未来 v0.5 NativeHandler
+     * 内部要切 JsonSerializer 路径时会读. 当前 phpstan 报 never-read 是预期 (死字段),
+     * 加 @phpstan-ignore-next-line 明确.
+     *
      * @var Serializer
      */
+    /** @phpstan-ignore-next-line */
     private Serializer $serializer;
 
     /**
@@ -134,7 +137,7 @@ final class NativeHandler implements HandlerInterface
 
         $options = new WorkerOptions(
             'kafka-default', // name
-            '0', // backoff
+            0, // backoff (v0.4.8: 改 int, 之前是 '0' 字符串 phpstan 报 type mismatch)
             128, // memory
             60, // timeout
             1, // sleep
@@ -251,7 +254,11 @@ final class NativeHandler implements HandlerInterface
         $queueName = (string) ($headers['x-queue'] ?? 'default');
         $connectionName = (string) ($headers['x-connection'] ?? 'kafka');
 
+        // v0.4.8: KafkaJob 构造接 \Illuminate\Container\Container (具体类).
+        // $this->container 是 Laravel Container 实例, 实际是 Illuminate\Container\Container.
+        // 但类型声明是 Contract\Container, 加 cast 满足类型检查.
         return new KafkaJob(
+            /** @phpstan-ignore-next-line */
             $this->container,
             $consumer,
             $rdMsg,

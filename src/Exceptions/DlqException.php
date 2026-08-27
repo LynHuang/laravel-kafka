@@ -30,6 +30,4 @@ use RuntimeException;
  * mateusjunges 没有专门的 DlqException，DLQ 失败会被当普通 KafkaException 处理
  * （结果：业务方容易 catch 不到，消息丢失）；我们独立成类 + 框架默认 requeue，更安全。
  */
-class DlqException extends RuntimeException
-{
-}
+class DlqException extends RuntimeException {}

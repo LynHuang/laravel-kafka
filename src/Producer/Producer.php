@@ -56,20 +56,8 @@ final class Producer
      * 最近一次 produce 的 delivery report 是否成功。
      *
      * 由 `handleDeliveryReport()` 回调写入；`send()` 循环读它决定抛异常。
-     *
-     * @var bool
      */
-    private $lastDeliverySucceeded = false;
-
-    /**
-     * 直接构造 (用于业务方).
-     *
-     * @param RdKafkaProducer $kafka 底层 librdkafka 实例
-     */
-    public function __construct(RdKafkaProducer $kafka)
-    {
-        $this->kafka = $kafka;
-    }
+    private bool $lastDeliverySucceeded = false;
 
     /**
      * 用已配好 dr_msg_cb 的 Conf 构造（{@see ProducerFactory::build()} 用）。
@@ -83,8 +71,13 @@ final class Producer
      */
     public static function fromConf(Conf $conf): self
     {
+        // 用 reference 暂存 Producer 实例. dr_msg_cb 会在 produce 时异步触发,
+        // 那时 $instanceRef 已被赋值. phpstan 静态分析会误判 "Strict comparison
+        // using !== between null and null will always evaluate to false" (异步行为),
+        // 加 @phpstan-ignore-next-line 明确告诉 phpstan: 这是异步 callback, 不用静态分析.
         $instanceRef = null;
         $conf->setDrMsgCb(function ($kafka, $message) use (&$instanceRef) {
+            /** @phpstan-ignore-next-line */
             if ($instanceRef !== null) {
                 $instanceRef->handleDeliveryReport($message);
             }
@@ -95,6 +88,16 @@ final class Producer
         $instanceRef = $instance;
 
         return $instance;
+    }
+
+    /**
+     * 直接构造 (用于业务方).
+     *
+     * @param RdKafkaProducer $kafka 底层 librdkafka 实例
+     */
+    public function __construct(RdKafkaProducer $kafka)
+    {
+        $this->kafka = $kafka;
     }
 
     /**
@@ -140,14 +143,19 @@ final class Producer
         );
 
         // 等待 delivery report
+        // v0.4.8: $this->lastDeliverySucceeded 在 callback (librdkafka 异步 dr_msg_cb) 里
+        // 被设为 true, phpstan 静态分析看不到异步行为, 报 "always true" 误报.
+        // 加 @phpstan-ignore-next-line 明确告诉分析器.
         $start = microtime(true);
         $timeoutMs = 5000;
+        /** @phpstan-ignore-next-line */
         while (! $this->lastDeliverySucceeded && (microtime(true) - $start) * 1000 < $timeoutMs) {
             $this->kafka->poll(50);
         }
 
         unset($this->deliveryCallbacks[$token]);
 
+        /** @phpstan-ignore-next-line */
         if (! $this->lastDeliverySucceeded) {
             throw new KafkaException(sprintf(
                 'Kafka produce timeout after %d ms (topic=%s, key=%s).',
@@ -157,6 +165,9 @@ final class Producer
             ));
         }
 
+        // v0.4.8: 业务场景下 if 抛异常或 fallback 都不命中, 走 return $partition.
+        // phpstan 静态分析觉得 if 永远 true 所以 unreachable. 实际是异步行为导致.
+        /** @phpstan-ignore-next-line */
         return $partition;
     }
 

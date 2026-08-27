@@ -17,8 +17,8 @@ use LaravelKafka\Manager\KafkaManager;
 use LaravelKafka\Producer\Message;
 use LaravelKafka\Producer\Producer;
 use LaravelKafka\Queue\Failed\FailedJobHandlerInterface;
-use LaravelKafka\Support\Testing\FakeMessageStorage;
 use LaravelKafka\Support\Header;
+use LaravelKafka\Support\Testing\FakeMessageStorage;
 use LaravelKafka\Support\TraceContext;
 
 /**
@@ -77,12 +77,8 @@ final class KafkaQueue extends Queue implements QueueContract
     private KafkaConfig $config;
 
     /**
-     * 当前 connection 名（如 'default' / 'reports'）。
-     *
      * 注意：父类 `Illuminate\Queue\Queue::$connectionName` 已经是 protected，
      * 本类**不**重新声明（避免 "must be protected or weaker" 错误）。
-     *
-     * @var string
      */
     // protected string $connectionName;  // 继承自父类，不重声明
 
@@ -91,12 +87,6 @@ final class KafkaQueue extends Queue implements QueueContract
      *
      * 父类 `Illuminate\Queue\Queue` 构造器需要 Container——这里传 null，
      * 容器在 {@see setContainer()} 延迟注入。
-     *
-     * @param Producer $producer         真实生产者
-     * @param Consumer $consumer         真实消费者
-     * @param FailedJobHandlerInterface $failedHandler 失败处理器
-     * @param KafkaConfig $config         Kafka 配置
-     * @param string $connectionName      connection 名
      */
     public function __construct(
         Producer $producer,
@@ -123,7 +113,18 @@ final class KafkaQueue extends Queue implements QueueContract
      * @param \Illuminate\Contracts\Container\Container $container
      * @return void
      */
-    public function setContainer(\Illuminate\Contracts\Container\Container $container): void
+    /**
+     * 延迟注入容器（Laravel 在 ServiceProvider boot 之后调）。
+     *
+     * 业务方一般**不直接调**——Laravel 框架内部用。
+     *
+     * v0.4.8: 改用具体 `Illuminate\Container\Container`（与父类 Job::$container 对齐），
+     *          之前用 `Contract\Container` phpstan 报 type mismatch
+     *
+     * @param \Illuminate\Container\Container $container
+     * @return void
+     */
+    public function setContainer(\Illuminate\Container\Container $container): void
     {
         $this->container = $container;
     }
@@ -205,8 +206,10 @@ final class KafkaQueue extends Queue implements QueueContract
         if ($key !== null) {
             $options['key'] = $key;
         }
+        // v0.4.8: 父类 createPayload($job, $queue, $data) 3 参数, 之前错传
+        // $this->connectionName (connection 名) 当 queue 名, 是 v0.1 老 bug
         return $this->pushRaw(
-            $this->createPayload($job, $this->connectionName, $data, $queue),
+            $this->createPayload($job, (string) $queue, $data),
             $queue,
             $options
         );
@@ -257,65 +260,6 @@ final class KafkaQueue extends Queue implements QueueContract
     }
 
     /**
-     * 内部：解析最终物理 topic（v0.2 增强）。
-     *
-     * 优先级（从高到低）：
-     *  1. `options['topic']` 显式覆盖（业务方一次性指定）
-     *  2. `KafkaConfig::topics[$queue]` 映射（业务方长期配置）
-     *  3. 队列名当 topic（同名）
-     *  4. `defaultTopic` 兜底
-     *
-     * @param string|null $queue Laravel 逻辑队列名
-     * @param array<string,mixed> $options
-     * @return string 物理 topic 名
-     */
-    private function resolveTopicWithOptions(?string $queue, array $options): string
-    {
-        if (isset($options['topic']) && $options['topic'] !== '') {
-            return (string) $options['topic'];
-        }
-        return $this->resolveTopic($queue);
-    }
-
-    /**
-     * 内部：dispatch Laravel 事件（容器未绑 Dispatcher 时静默跳过）。
-     *
-     * 为什么静默跳过：单元测试可能没有完整 Laravel 容器，业务方测试 KafkaFake 时
-     * 不希望"缺 Dispatcher 绑定"导致 pushRaw 抛异常。
-     *
-     * @param object $event Laravel 事件实例
-     * @return void
-     */
-    private function dispatchEvent(object $event): void
-    {
-        if ($this->container === null) {
-            return;
-        }
-        if (! $this->container->bound(Dispatcher::class)) {
-            return;
-        }
-        $this->container->make(Dispatcher::class)->dispatch($event);
-    }
-
-    /**
-     * 内部：检查 fake 模式。
-     *
-     * 防御性检查：容器未注入 / KafkaManager 未绑定都返回 false（视为非 fake）。
-     *
-     * @return bool true = fake 模式
-     */
-    private function isFakeMode(): bool
-    {
-        if ($this->container === null) {
-            return false;
-        }
-        if (! $this->container->bound(KafkaManager::class)) {
-            return false;
-        }
-        return $this->container->make(KafkaManager::class)->isFake();
-    }
-
-    /**
      * 延迟消息 push（v0.3 时间轮分层 topic）。
      *
      * ## v0.1/v0.2 行为
@@ -352,7 +296,7 @@ final class KafkaQueue extends Queue implements QueueContract
             $router = $this->container->make(DelayRouter::class);
             $route = $router->route($delaySeconds);
 
-            $payload = $this->createPayload($job, $this->connectionName, $data, $queue);
+            $payload = $this->createPayload($job, (string) $queue, $data);
             return $this->pushRaw(
                 $payload,
                 $route['topic'],  // 写到 tier topic 而不是主 topic
@@ -366,7 +310,7 @@ final class KafkaQueue extends Queue implements QueueContract
 
         // 回退：v0.2 行为（header 同步阻塞）
         return $this->pushRaw(
-            $this->createPayload($job, $this->connectionName, $data, $queue),
+            $this->createPayload($job, (string) $queue, $data),
             $queue,
             ['delay_seconds' => $delaySeconds]
         );
@@ -467,6 +411,65 @@ final class KafkaQueue extends Queue implements QueueContract
     public function failedHandler(): FailedJobHandlerInterface
     {
         return $this->failedHandler;
+    }
+
+    /**
+     * 内部：解析最终物理 topic（v0.2 增强）。
+     *
+     * 优先级（从高到低）：
+     *  1. `options['topic']` 显式覆盖（业务方一次性指定）
+     *  2. `KafkaConfig::topics[$queue]` 映射（业务方长期配置）
+     *  3. 队列名当 topic（同名）
+     *  4. `defaultTopic` 兜底
+     *
+     * @param string|null $queue Laravel 逻辑队列名
+     * @param array<string,mixed> $options
+     * @return string 物理 topic 名
+     */
+    private function resolveTopicWithOptions(?string $queue, array $options): string
+    {
+        if (isset($options['topic']) && $options['topic'] !== '') {
+            return (string) $options['topic'];
+        }
+        return $this->resolveTopic($queue);
+    }
+
+    /**
+     * 内部：dispatch Laravel 事件（容器未绑 Dispatcher 时静默跳过）。
+     *
+     * 为什么静默跳过：单元测试可能没有完整 Laravel 容器，业务方测试 KafkaFake 时
+     * 不希望"缺 Dispatcher 绑定"导致 pushRaw 抛异常。
+     *
+     * @param object $event Laravel 事件实例
+     * @return void
+     */
+    private function dispatchEvent(object $event): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+        if (! $this->container->bound(Dispatcher::class)) {
+            return;
+        }
+        $this->container->make(Dispatcher::class)->dispatch($event);
+    }
+
+    /**
+     * 内部：检查 fake 模式。
+     *
+     * 防御性检查：容器未注入 / KafkaManager 未绑定都返回 false（视为非 fake）。
+     *
+     * @return bool true = fake 模式
+     */
+    private function isFakeMode(): bool
+    {
+        if ($this->container === null) {
+            return false;
+        }
+        if (! $this->container->bound(KafkaManager::class)) {
+            return false;
+        }
+        return $this->container->make(KafkaManager::class)->isFake();
     }
 
     /**

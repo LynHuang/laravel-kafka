@@ -6,7 +6,6 @@ namespace LaravelKafka\Producer;
 
 use LaravelKafka\Config\KafkaConfig;
 use RdKafka\Conf;
-use RdKafka\Producer as RdKafkaProducer;
 
 /**
  * Producer 工厂（v0.1 单例工厂）。

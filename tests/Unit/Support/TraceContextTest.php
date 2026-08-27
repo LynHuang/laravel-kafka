@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace LaravelKafka\Tests\Unit\Support;
 
-use LaravelKafka\Support\Header;
 use LaravelKafka\Support\TraceContext;
 use LaravelKafka\Tests\TestCase;
 
@@ -21,7 +20,7 @@ final class TraceContextTest extends TestCase
         $tp = TraceContext::next();
 
         // 格式：00-<32hex>-<16hex>-<2hex>
-        $this->assertMatchesRegularExpression(
+        self::assertMatchesRegularExpression(
             '/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/',
             $tp
         );
@@ -31,7 +30,7 @@ final class TraceContextTest extends TestCase
     {
         $a = TraceContext::next();
         $b = TraceContext::next();
-        $this->assertNotSame($a, $b);
+        self::assertNotSame($a, $b);
     }
 
     public function testParseValidTraceparent(): void
@@ -39,23 +38,23 @@ final class TraceContextTest extends TestCase
         $tp = TraceContext::next();
         $parsed = TraceContext::parse($tp);
 
-        $this->assertNotNull($parsed);
-        $this->assertSame('00', $parsed['trace_id'] === '' ? '' : '00'); // 简化断言
-        $this->assertArrayHasKey('trace_id', $parsed);
-        $this->assertArrayHasKey('parent_id', $parsed);
-        $this->assertArrayHasKey('flags', $parsed);
-        $this->assertSame(32, strlen($parsed['trace_id']));
-        $this->assertSame(16, strlen($parsed['parent_id']));
-        $this->assertSame(2, strlen($parsed['flags']));
-        $this->assertSame('01', $parsed['flags']);
+        self::assertNotNull($parsed);
+        self::assertSame('00', $parsed['trace_id'] === '' ? '' : '00'); // 简化断言
+        self::assertArrayHasKey('trace_id', $parsed);
+        self::assertArrayHasKey('parent_id', $parsed);
+        self::assertArrayHasKey('flags', $parsed);
+        self::assertSame(32, strlen($parsed['trace_id']));
+        self::assertSame(16, strlen($parsed['parent_id']));
+        self::assertSame(2, strlen($parsed['flags']));
+        self::assertSame('01', $parsed['flags']);
     }
 
     public function testParseInvalidReturnsNull(): void
     {
-        $this->assertNull(TraceContext::parse('not-a-valid-traceparent'));
-        $this->assertNull(TraceContext::parse('00-abc-def-01')); // trace_id 不是 32 hex
-        $this->assertNull(TraceContext::parse('01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01')); // 版本错
-        $this->assertNull(TraceContext::parse(''));
+        self::assertNull(TraceContext::parse('not-a-valid-traceparent'));
+        self::assertNull(TraceContext::parse('00-abc-def-01')); // trace_id 不是 32 hex
+        self::assertNull(TraceContext::parse('01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01')); // 版本错
+        self::assertNull(TraceContext::parse(''));
     }
 
     public function testChildPreservesTraceId(): void
@@ -66,14 +65,14 @@ final class TraceContextTest extends TestCase
         $childParsed = TraceContext::parse($child);
         $parentParsed = TraceContext::parse($parent);
 
-        $this->assertSame($parentParsed['trace_id'], $childParsed['trace_id']);
-        $this->assertNotSame($parentParsed['parent_id'], $childParsed['parent_id']);
+        self::assertSame($parentParsed['trace_id'], $childParsed['trace_id']);
+        self::assertNotSame($parentParsed['parent_id'], $childParsed['parent_id']);
     }
 
     public function testChildOfInvalidFallsBackToNew(): void
     {
         $child = TraceContext::child('garbage');
-        $this->assertMatchesRegularExpression(
+        self::assertMatchesRegularExpression(
             '/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/',
             $child
         );
@@ -82,11 +81,11 @@ final class TraceContextTest extends TestCase
     public function testShortTraceIdExtractsFirst16Hex(): void
     {
         $tp = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
-        $this->assertSame('0af7651916cd43dd', TraceContext::shortTraceId($tp));
+        self::assertSame('0af7651916cd43dd', TraceContext::shortTraceId($tp));
     }
 
     public function testShortTraceIdOfInvalidReturnsNull(): void
     {
-        $this->assertNull(TraceContext::shortTraceId('garbage'));
+        self::assertNull(TraceContext::shortTraceId('garbage'));
     }
 }

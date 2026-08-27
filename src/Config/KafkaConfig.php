@@ -40,6 +40,157 @@ use LaravelKafka\Exceptions\KafkaException;
 final class KafkaConfig
 {
     /**
+     * Producer 字段名 → librdkafka key 翻译表。
+     *
+     * 业务方在 config/kafka.php 写业务方友好命名（`compression` / `batch_size` / `linger_ms`），
+     * 翻译成 librdkafka 实际接受的 key（`compression.type` / `batch.size` / `linger.ms`）。
+     *
+     * 命名来源：librdkafka [CONFIGURATION.md](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md)
+     *
+     * @var array<string,string>
+     */
+    private const PRODUCER_KEY_MAP = [
+        'compression'          => 'compression.type',
+        'batch_size'           => 'batch.size',
+        'linger_ms'            => 'linger.ms',
+        'request_timeout_ms'   => 'request.timeout.ms',
+        'message_timeout_ms'   => 'message.timeout.ms',
+        'enable_idempotence'   => 'enable.idempotence',
+        // 'acks' 已经是 librdkafka 原生名，无需翻译
+    ];
+
+    /**
+     * Consumer 字段名 → librdkafka key 翻译表。
+     *
+     * `group_id` / `auto_offset_reset` / `isolation_level` 已在
+     * {@see toConsumerRdKafkaConfig()} 顶部显式翻译，这里只列剩余的。
+     *
+     * @var array<string,string>
+     */
+    private const CONSUMER_KEY_MAP = [
+        'max_poll_interval_ms'  => 'max.poll.interval.ms',
+        'session_timeout_ms'    => 'session.timeout.ms',
+        'heartbeat_interval_ms' => 'heartbeat.interval.ms',
+        'fetch_min_bytes'       => 'fetch.min.bytes',
+        'fetch_max_bytes'       => 'fetch.max.bytes',
+        'enable_auto_commit'    => 'enable.auto.commit',
+    ];
+    /**
+     * 连接名（如 "default" / "reports"）。
+     */
+    private string $name;
+
+    /**
+     * 引导 broker 列表（逗号分隔，如 "host1:9092,host2:9092"）。
+     */
+    private string $brokers;
+
+    /**
+     * 客户端标识（librdkafka `client.id`）。
+     */
+    private string $clientId;
+
+    /**
+     * 安全协议（PLAINTEXT | SSL | SASL_PLAINTEXT | SASL_SSL）。
+     */
+    private string $protocol;
+
+    /**
+     * SASL 配置（mechanism / username / password）。
+     *
+     * @var array<string,string>
+     */
+    private array $sasl;
+
+    /**
+     * SSL 配置（ca_location / cert_location / key_location）。
+     *
+     * @var array<string,string>
+     */
+    private array $ssl;
+
+    /**
+     * 默认 topic。
+     */
+    private string $defaultTopic;
+
+    /**
+     * 队列名 → topic 映射。
+     *
+     * @var array<string,string>
+     */
+    private array $topics;
+
+    /**
+     * 生产者配置（librdkafka 透传）。
+     *
+     * @var array<string,mixed>
+     */
+    private array $producer;
+
+    /**
+     * 消费者配置。
+     *
+     * @var array<string,mixed>
+     */
+    private array $consumer;
+
+    /**
+     * 失败处理配置（driver / database / dlq / hybrid）。
+     *
+     * @var array<string,mixed>
+     */
+    private array $failed;
+
+    /**
+     * 延迟消息配置（v0.3 时间轮预留）。
+     *
+     * @var array<string,mixed>
+     */
+    private array $delay;
+
+    /**
+     * 回溯配置（v0.3 replay 预留）。
+     *
+     * @var array<string,mixed>
+     */
+    private array $replay;
+
+    /**
+     * 从业务方 array 配置构造（ServiceProvider boot 时调）。
+     *
+     * 字段映射：
+     *  - `brokers` → brokers
+     *  - `client_id` → clientId（默认 `laravel-kafka`）
+     *  - `protocol` → protocol（默认 `PLAINTEXT`）
+     *  - `queue` → defaultTopic（默认 `laravel-jobs`）—— 兼容 v0.1 早期命名
+     *  - `topics` / `producer` / `consumer` / `failed` / `delay` / `replay` → 各自
+     *
+     * @param string $name connection 名
+     * @param array<string,mixed> $config 业务方配置
+     * @return self
+     * @throws KafkaException 校验失败
+     */
+    public static function fromArray(string $name, array $config): self
+    {
+        return new self(
+            $name,
+            (string) ($config['brokers'] ?? ''),
+            (string) ($config['client_id'] ?? 'laravel-kafka'),
+            (string) ($config['protocol'] ?? 'PLAINTEXT'),
+            (array) ($config['sasl'] ?? []),
+            (array) ($config['ssl'] ?? []),
+            isset($config['queue']) ? (string) $config['queue'] : '',
+            (array) ($config['topics'] ?? []),
+            (array) ($config['producer'] ?? []),
+            (array) ($config['consumer'] ?? []),
+            (array) ($config['failed'] ?? []),
+            (array) ($config['delay'] ?? []),
+            (array) ($config['replay'] ?? []),
+        );
+    }
+
+    /**
      * @param string                $name             连接名（如 "default" / "reports"）
      * @param string                $brokers          引导 broker 列表（逗号分隔，如 "host1:9092,host2:9092"）
      * @param string                $clientId         客户端标识（librdkafka `client.id`）
@@ -292,43 +443,6 @@ final class KafkaConfig
     }
 
     /**
-     * Producer 字段名 → librdkafka key 翻译表。
-     *
-     * 业务方在 config/kafka.php 写业务方友好命名（`compression` / `batch_size` / `linger_ms`），
-     * 翻译成 librdkafka 实际接受的 key（`compression.type` / `batch.size` / `linger.ms`）。
-     *
-     * 命名来源：librdkafka [CONFIGURATION.md](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md)
-     *
-     * @var array<string,string>
-     */
-    private const PRODUCER_KEY_MAP = [
-        'compression'          => 'compression.type',
-        'batch_size'           => 'batch.size',
-        'linger_ms'            => 'linger.ms',
-        'request_timeout_ms'   => 'request.timeout.ms',
-        'message_timeout_ms'   => 'message.timeout.ms',
-        'enable_idempotence'   => 'enable.idempotence',
-        // 'acks' 已经是 librdkafka 原生名，无需翻译
-    ];
-
-    /**
-     * Consumer 字段名 → librdkafka key 翻译表。
-     *
-     * `group_id` / `auto_offset_reset` / `isolation_level` 已在
-     * {@see toConsumerRdKafkaConfig()} 顶部显式翻译，这里只列剩余的。
-     *
-     * @var array<string,string>
-     */
-    private const CONSUMER_KEY_MAP = [
-        'max_poll_interval_ms'  => 'max.poll.interval.ms',
-        'session_timeout_ms'    => 'session.timeout.ms',
-        'heartbeat_interval_ms' => 'heartbeat.interval.ms',
-        'fetch_min_bytes'       => 'fetch.min.bytes',
-        'fetch_max_bytes'       => 'fetch.max.bytes',
-        'enable_auto_commit'    => 'enable.auto.commit',
-    ];
-
-    /**
      * 完整 producer 配置（通用 + producer 子配置，已翻译 key）。
      *
      * @return array<string,string>
@@ -419,40 +533,6 @@ final class KafkaConfig
             }
         }
         return $out;
-    }
-
-    /**
-     * 从业务方 array 配置构造（ServiceProvider boot 时调）。
-     *
-     * 字段映射：
-     *  - `brokers` → brokers
-     *  - `client_id` → clientId（默认 `laravel-kafka`）
-     *  - `protocol` → protocol（默认 `PLAINTEXT`）
-     *  - `queue` → defaultTopic（默认 `laravel-jobs`）—— 兼容 v0.1 早期命名
-     *  - `topics` / `producer` / `consumer` / `failed` / `delay` / `replay` → 各自
-     *
-     * @param string $name connection 名
-     * @param array<string,mixed> $config 业务方配置
-     * @return self
-     * @throws KafkaException 校验失败
-     */
-    public static function fromArray(string $name, array $config): self
-    {
-        return new self(
-            $name,
-            (string) ($config['brokers'] ?? ''),
-            (string) ($config['client_id'] ?? 'laravel-kafka'),
-            (string) ($config['protocol'] ?? 'PLAINTEXT'),
-            (array) ($config['sasl'] ?? []),
-            (array) ($config['ssl'] ?? []),
-            isset($config['queue']) ? (string) $config['queue'] : '',
-            (array) ($config['topics'] ?? []),
-            (array) ($config['producer'] ?? []),
-            (array) ($config['consumer'] ?? []),
-            (array) ($config['failed'] ?? []),
-            (array) ($config['delay'] ?? []),
-            (array) ($config['replay'] ?? []),
-        );
     }
 
     /**

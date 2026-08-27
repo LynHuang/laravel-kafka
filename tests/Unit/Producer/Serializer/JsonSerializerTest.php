@@ -18,28 +18,28 @@ final class JsonSerializerTest extends TestCase
         $s = new JsonSerializer();
         $data = ['a' => 1, 'b' => '中文'];
         $encoded = $s->encode($data);
-        $this->assertStringContainsString('中文', $encoded); // UNESCAPED_UNICODE
-        $this->assertSame($data, $s->decode($encoded));
+        self::assertStringContainsString('中文', $encoded); // UNESCAPED_UNICODE
+        self::assertSame($data, $s->decode($encoded));
     }
 
     public function testEncodeKeepsUnicode(): void
     {
         $s = new JsonSerializer();
         $encoded = $s->encode(['message' => '你好世界']);
-        $this->assertStringContainsString('你好世界', $encoded);
+        self::assertStringContainsString('你好世界', $encoded);
     }
 
     public function testEncodeKeepsSlashes(): void
     {
         $s = new JsonSerializer();
         $encoded = $s->encode(['url' => 'https://example.com/foo']);
-        $this->assertStringContainsString('https://example.com/foo', $encoded);
+        self::assertStringContainsString('https://example.com/foo', $encoded);
     }
 
     public function testDecodeEmptyString(): void
     {
         $s = new JsonSerializer();
-        $this->assertNull($s->decode(''));
+        self::assertNull($s->decode(''));
     }
 
     public function testDecodeInvalidJsonThrows(): void
@@ -52,6 +52,6 @@ final class JsonSerializerTest extends TestCase
     public function testName(): void
     {
         $s = new JsonSerializer();
-        $this->assertSame('json', $s->name());
+        self::assertSame('json', $s->name());
     }
 }

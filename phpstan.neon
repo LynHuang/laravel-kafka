@@ -7,6 +7,12 @@ parameters:
     ignoreErrors:
         # ext-rdkafka 反射由 PHPStan 推断
         - '#Call to an undefined method RdKafka\\.*#'
+        # Laravel 8 Connection 基类的 zadd/set/zcard 等方法都是通过 __call
+        # 转发到 phpredis/predis client, phpstan 静态分析看不到 magic method.
+        # RedisFailedJobProvider 业务场景下用 phpredis, 实际方法存在.
+        -
+            message: '#Call to an undefined method Illuminate\\Redis\\Connections\\Connection::(zadd|set|zcard|zrange|zremrangebyrank|del|zrevrange|get|zrem)\(\)#'
+            path: src/Queue/Failed/RedisFailedJobProvider.php
         # KafkaConfig 用 dynamic properties (PHP 7 兼容写法, PHP 8.2+ 弃用)
         # 已知 v0.4.1 历史代码, v0.5 改用 explicit property declarations
         -
@@ -16,13 +22,15 @@ parameters:
     checkMissingIterableValueType: false
     reportUnmatchedIgnoredErrors: false
 
-# v0.4.1 round 7 已知问题:
-#   PHPStan 120 errors 来自 src/ 业务代码历史问题, 不属于 v0.4.1 (CI 修复) 范围.
-#   linter.yml 已给 PHPStan step 加 continue-on-error: true, CI 不再 fail.
-#   v0.5 待办清理 (任选一):
-#     A. 业务代码加 explicit property declarations (修 dynamic properties 错)
-#     B. HybridFailedJobHandler::traceTruncateBytes / messageTruncateBytes 真正读或删
-#     C. KafkaJob::fail() 改 public 签名匹配父类 (或重构继承)
-#     D. KafkaJob::markAsFailed() 改 public 匹配 Illuminate\Contracts\Queue\Job
-#     E. KafkaQueue 删错 @var above method, 修 $container 类型 (covariance), 修 createPayload 调用
-#     F. 删 v0.4.1 加的 KafkaConfig ignore entry
+# v0.4.8 已知问题:
+#   PHPStan 0 errors 业务代码清理完成 (从 v0.4.1 120 errors 降到 0).
+#   RedisFailedJobProvider 13 个 magic method 误报走 phpstan.neon ignoreErrors.
+#   v0.4.8 主要修复:
+#     A. 7 个值对象类 (KafkaConfig/Message/Events/*/FailedContext) 加 explicit property declarations
+#     B. KafkaJob 改用具体类 Illuminate\Container\Container
+#     C. KafkaQueue 修 @var above method + Container type covariance
+#     D. Producer 修 dead code 误报 (lastDeliverySucceeded async callback)
+#     E. NativeHandler 修 HorizonMetricsRecorder namespace + WorkerOptions $backoff type
+#     F. ServiceProvider 用具体类 cast 调 isShared
+#     G. createPayload 去掉错传 $this->connectionName (v0.1 老 bug)
+#   linter.yml PHPStan step 已可删 continue-on-error: true.

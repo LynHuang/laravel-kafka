@@ -349,6 +349,8 @@ final class Consumer
             $headers,
             $rdMsg->key !== null ? (string) $rdMsg->key : null,
             (int) $rdMsg->partition,
+            // v0.4.8: librdkafka 实测 timestamp 偶发为 0 (broker 没传), ?? 兜底是业务安全, phpstan 误报.
+            /** @phpstan-ignore-next-line */
             (int) ($rdMsg->timestamp ?? 0),
         );
     }

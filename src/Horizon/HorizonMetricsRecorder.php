@@ -64,6 +64,32 @@ use LaravelKafka\Exceptions\KafkaException;
 final class HorizonMetricsRecorder
 {
     /**
+     * Horizon 5.x `updateMetrics` Lua 脚本（逐字复制）。
+     *
+     * @var string
+     */
+    private const UPDATE_METRICS_LUA = <<<'LUA'
+                redis.call('hsetnx', KEYS[1], 'throughput', 0)
+                redis.call('sadd', KEYS[2], KEYS[1])
+                local hash = redis.call('hmget', KEYS[1], 'throughput', 'runtime')
+                local throughput = hash[1] + 1
+                local runtime = 0
+                if hash[2] then
+                    runtime = ((hash[1] * tonumber(hash[2])) + tonumber(ARGV[1])) / throughput
+                else
+                    runtime = tonumber(ARGV[1])
+                end
+                redis.call('hmset', KEYS[1], 'throughput', throughput, 'runtime', runtime)
+                return 1
+        LUA;
+
+    /**
+     * 缓存 SCRIPT LOAD 的 SHA1 (跨调用复用, 避免每次重传 Lua).
+     *
+     * @var string|null
+     */
+    private static $scriptSha = null;
+    /**
      * Redis 连接工厂（`Illuminate\Contracts\Redis\Factory`）。
      *
      * @var mixed
@@ -79,33 +105,6 @@ final class HorizonMetricsRecorder
      * Horizon Redis key 前缀（默认 `horizon:`）。
      */
     private string $prefix;
-
-    /**
-     * Horizon 5.x `updateMetrics` Lua 脚本（逐字复制）。
-     *
-     * @var string
-     */
-    private const UPDATE_METRICS_LUA = <<<'LUA'
-        redis.call('hsetnx', KEYS[1], 'throughput', 0)
-        redis.call('sadd', KEYS[2], KEYS[1])
-        local hash = redis.call('hmget', KEYS[1], 'throughput', 'runtime')
-        local throughput = hash[1] + 1
-        local runtime = 0
-        if hash[2] then
-            runtime = ((hash[1] * tonumber(hash[2])) + tonumber(ARGV[1])) / throughput
-        else
-            runtime = tonumber(ARGV[1])
-        end
-        redis.call('hmset', KEYS[1], 'throughput', throughput, 'runtime', runtime)
-        return 1
-LUA;
-
-    /**
-     * 缓存 SCRIPT LOAD 的 SHA1 (跨调用复用, 避免每次重传 Lua).
-     *
-     * @var string|null
-     */
-    private static $scriptSha = null;
 
     /**
      * @param mixed $redis Laravel Redis Factory（如 `Illuminate\Contracts\Redis\Factory`）
@@ -144,6 +143,22 @@ LUA;
     public function incrementJob(string $jobClass, float $runtimeMs): void
     {
         $this->evalMetrics('job:' . $jobClass, 'measured_jobs', $runtimeMs);
+    }
+
+    /**
+     * 拿 Redis key 前缀（含末尾 `:`）。
+     */
+    public function prefix(): string
+    {
+        return $this->prefix;
+    }
+
+    /**
+     * 拿 Redis 连接名。
+     */
+    public function connection(): string
+    {
+        return $this->connection;
     }
 
     /**
@@ -198,29 +213,10 @@ LUA;
             return;
         }
 
-        if ($conn instanceof \Illuminate\Redis\Connections\PredisConnection) {
-            // predis 暂时没 prefix + eval 双重 bug, 用包装层 (业务方装 predis 的话)
-            $conn->eval(self::UPDATE_METRICS_LUA, 2, $key1, $key2, $runtimeArg);
-            return;
-        }
-
+        // v0.4.8: PredisConnection 也走 fallback 路径 (predis 客户端继承自 Connection,
+        // 没有显式 eval() 声明, 实际通过 __call 转发). 删冗余的 PredisConnection 分支.
         // Fallback: 未知 connection 类型, 试公共 eval
+        /** @phpstan-ignore-next-line */
         $conn->eval(self::UPDATE_METRICS_LUA, 2, $key1, $key2, $runtimeArg);
-    }
-
-    /**
-     * 拿 Redis key 前缀（含末尾 `:`）。
-     */
-    public function prefix(): string
-    {
-        return $this->prefix;
-    }
-
-    /**
-     * 拿 Redis 连接名。
-     */
-    public function connection(): string
-    {
-        return $this->connection;
     }
 }

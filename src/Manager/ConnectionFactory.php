@@ -96,7 +96,8 @@ final class ConnectionFactory
 
         // v0.1 老 bug 修复：注入容器（让 KafkaQueue 能 fake / dispatch 事件）
         // 父类 Illuminate\Queue\Queue 的 $container 字段是 protected，
-        // 我们重写的 setContainer() 接受 Container 接口（更宽）
+        // v0.4.8 改用具体类 Illuminate\Container\Container (与父类对齐)
+        /** @phpstan-ignore-next-line */
         $queue->setContainer($this->container);
 
         return $queue;
