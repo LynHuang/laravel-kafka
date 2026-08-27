@@ -48,17 +48,79 @@ final class HorizonSnapshotCommand extends Command
 
     public function handle(): int
     {
-        $this->info('[kafka:horizon:snapshot] 业务方应同时启用 Horizon 自身 snapshot 任务。');
+        $this->info('[kafka:horizon:snapshot] v0.4.4: 真跑 snapshot (v0.4.0-0.4.3 是 stub).');
 
+        $connection = (string) $this->option('connection');
+        $prefix = (string) $this->option('prefix');
         $trim = (int) $this->option('trim');
         $trimJob = (int) $this->option('trim-job');
 
-        $this->warn(sprintf(
-            '当前命令保留参数 trim=%d, trim-job=%d（Horizon config 优先）',
-            $trim,
-            $trimJob
+        // 拿 Redis Factory
+        $factory = $this->laravel->make(\Illuminate\Contracts\Redis\Factory::class);
+        $conn = $factory->connection($connection);
+
+        // v0.4.4: Laravel PhpRedisConnection 自动加 prefix (e.g. 'laravel_database_'),
+        // smembers 拿到的 key 实际是 'laravel_database_<prefix>queue:xxx'.
+        // snapshotQueue 调 phpredis 又会**再加一遍** prefix → 双重 prefix bug.
+        // 修法: 拿到 key 后手动 strip Laravel prefix, snapshotQueue 内部再加回.
+        $laravelPrefix = '';
+        if ($conn instanceof \Illuminate\Redis\Connections\PhpRedisConnection) {
+            $laravelPrefix = (string) $conn->client()->getOption(\Redis::OPT_PREFIX);
+        }
+
+        // 拿 measured_queues / measured_jobs Set 的成员
+        $queueMembers = $this->scanSet($conn, $prefix . 'measured_queues');
+        $jobMembers = $this->scanSet($conn, $prefix . 'measured_jobs');
+
+        $snapshot = new \LaravelKafka\Horizon\HorizonSnapshot($trim, $trimJob);
+
+        $countQueues = 0;
+        foreach ($queueMembers as $fullKey) {
+            // strip Laravel prefix + strip 'queue:' 前缀
+            $stripped = (string) $fullKey;
+            if ($laravelPrefix !== '' && strpos($stripped, $laravelPrefix) === 0) {
+                $stripped = substr($stripped, strlen($laravelPrefix));
+            }
+            // stripped 现在应该是 '<prefix>queue:emails'
+            $queue = substr($stripped, strlen($prefix . 'queue:'));
+            $snapshot->snapshotQueue($conn, $prefix, $queue);
+            $countQueues++;
+        }
+
+        $countJobs = 0;
+        foreach ($jobMembers as $fullKey) {
+            $stripped = (string) $fullKey;
+            if ($laravelPrefix !== '' && strpos($stripped, $laravelPrefix) === 0) {
+                $stripped = substr($stripped, strlen($laravelPrefix));
+            }
+            $job = substr($stripped, strlen($prefix . 'job:'));
+            $snapshot->snapshotQueue($conn, $prefix, $job);
+            $countJobs++;
+        }
+
+        $this->info(sprintf(
+            '[kafka:horizon:snapshot] snapshotted %d queue(s), %d job(s) to prefix="%s" connection="%s"',
+            $countQueues,
+            $countJobs,
+            $prefix,
+            $connection
         ));
 
+        $this->warn('业务方应同时启用 Horizon 自身 snapshot 任务（如果已装 Horizon）。');
+
         return 0;
+    }
+
+    /**
+     * 内部：拿 Redis Set 的成员。
+     *
+     * @param mixed $conn
+     * @param string $setKey
+     * @return string[]
+     */
+    private function scanSet($conn, string $setKey): array
+    {
+        $members = (array) $conn->smembers($setKey);
+        return $members;
     }
 }

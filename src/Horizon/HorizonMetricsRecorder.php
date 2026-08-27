@@ -97,7 +97,15 @@ final class HorizonMetricsRecorder
             runtime = tonumber(ARGV[1])
         end
         redis.call('hmset', KEYS[1], 'throughput', throughput, 'runtime', runtime)
+        return 1
 LUA;
+
+    /**
+     * 缓存 SCRIPT LOAD 的 SHA1 (跨调用复用, 避免每次重传 Lua).
+     *
+     * @var string|null
+     */
+    private static $scriptSha = null;
 
     /**
      * @param mixed $redis Laravel Redis Factory（如 `Illuminate\Contracts\Redis\Factory`）
@@ -140,6 +148,12 @@ LUA;
 
     /**
      * 内部：执行 Horizon 兼容的 `updateMetrics` Lua 脚本。
+     *
+     * v0.4.4 hotfix: Laravel 8.x `PhpRedisConnection::eval()` 包装层用 eval 调用时
+     * 实际**不执行** Lua 脚本 (返回 false 但不抛错, silent fail).
+     * 修法: 穿透到 phpredis client (`$conn->client()`) 用 SCRIPT LOAD + EVALSHA 路径,
+     *        跳过 Laravel 包装层 + phpredis eval 在 prefix 模式下的返回值 bug.
+     *        Public 签名不变 (保持 unit test mock 不破).
      */
     private function evalMetrics(string $metricsKey, string $measuredSetKey, float $runtimeMs): void
     {
@@ -147,13 +161,51 @@ LUA;
         // PHP 8.0+ 反对 ',' 作为小数点 → Lua 不接受 ','，替换为 '.'
         $runtimeArg = str_replace(',', '.', (string) $runtimeMs);
 
-        $conn->eval(
-            self::UPDATE_METRICS_LUA,
-            2,  // KEYS 数量
-            $this->prefix . $metricsKey,
-            $this->prefix . $measuredSetKey,
-            $runtimeArg
-        );
+        $key1 = $this->prefix . $metricsKey;
+        $key2 = $this->prefix . $measuredSetKey;
+
+        if ($conn instanceof \Illuminate\Redis\Connections\PhpRedisConnection) {
+            /** @var \Redis $client */
+            $client = $conn->client();
+
+            // SCRIPT LOAD 拿 SHA1 (跨调用缓存, 静态变量)
+            if (self::$scriptSha === null) {
+                $savedPrefix = $client->getOption(\Redis::OPT_PREFIX);
+                $client->setOption(\Redis::OPT_PREFIX, '');
+                self::$scriptSha = (string) $client->script('load', self::UPDATE_METRICS_LUA);
+                $client->setOption(\Redis::OPT_PREFIX, $savedPrefix);
+            }
+
+            // EVALSHA — 直接执行已加载脚本, 不会触发 phpredis eval 返回值 bug
+            $result = $client->evalsha(self::$scriptSha, [$key1, $key2, $runtimeArg], 2);
+            if ($result === false) {
+                // SCRIPT 可能被 Redis flush 掉, 重 load 后再试一次
+                $savedPrefix = $client->getOption(\Redis::OPT_PREFIX);
+                $client->setOption(\Redis::OPT_PREFIX, '');
+                self::$scriptSha = (string) $client->script('load', self::UPDATE_METRICS_LUA);
+                $client->setOption(\Redis::OPT_PREFIX, $savedPrefix);
+                $result = $client->evalsha(self::$scriptSha, [$key1, $key2, $runtimeArg], 2);
+                if ($result === false) {
+                    throw new KafkaException(sprintf(
+                        'HorizonMetricsRecorder::evalMetrics phpredis evalsha failed: %s (keys=%s, %s; arg=%s)',
+                        (string) $client->getLastError(),
+                        $key1,
+                        $key2,
+                        $runtimeArg
+                    ));
+                }
+            }
+            return;
+        }
+
+        if ($conn instanceof \Illuminate\Redis\Connections\PredisConnection) {
+            // predis 暂时没 prefix + eval 双重 bug, 用包装层 (业务方装 predis 的话)
+            $conn->eval(self::UPDATE_METRICS_LUA, 2, $key1, $key2, $runtimeArg);
+            return;
+        }
+
+        // Fallback: 未知 connection 类型, 试公共 eval
+        $conn->eval(self::UPDATE_METRICS_LUA, 2, $key1, $key2, $runtimeArg);
     }
 
     /**

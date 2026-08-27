@@ -54,7 +54,12 @@ final class HorizonSnapshot
     /**
      * 给单个 queue 写一份快照 + 清当前计数器。
      *
-     * @param mixed $conn Redis connection
+     * v0.4.4 hotfix: 原实现 `$conn->transaction(fn => $trans->execute())` 用 predis 风格,
+     *                phpredis 实际方法是 `exec()` 不是 `execute()`, 抛 'undefined method Redis::execute()'.
+     * 修法: 不用 transaction 包装, 直接 sequential 调用 (hmget + del), 接受 race condition
+     *        (snapshot 跑在后台, 业务方短时双写不影响 metrics).
+     *
+     * @param mixed $conn Redis connection (Laravel PhpRedisConnection / PredisConnection / raw phpredis)
      * @param string $prefix Horizon key 前缀
      * @param string $queue queue 名
      * @return void
@@ -65,15 +70,12 @@ final class HorizonSnapshot
         $snapshotKey = $prefix . 'snapshot:queue:' . $queue;
         $time = CarbonImmutable::now()->getTimestamp();
 
-        // 1. 读 + 删当前 metrics（事务式）
-        $values = $conn->transaction(function ($trans) use ($hashKey) {
-            $trans->hmget($hashKey, ['throughput', 'runtime']);
-            $trans->del($hashKey);
-            return $trans->execute();
-        });
+        // 1. 读 + 删当前 metrics (race-tolerant: 业务方 snapshot 跑在后台, 短时双写可接受)
+        $values = $conn->hmget($hashKey, ['throughput', 'runtime']);
+        $conn->del($hashKey);
 
-        $throughput = $values[0] ?? 0;
-        $runtime = $values[1] ?? 0;
+        $throughput = is_array($values) ? ((int) ($values[0] ?? 0)) : 0;
+        $runtime = is_array($values) ? ((float) ($values[1] ?? 0)) : 0.0;
 
         // 2. 写快照
         $conn->zadd($snapshotKey, $time, json_encode([
