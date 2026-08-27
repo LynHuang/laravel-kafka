@@ -19,15 +19,16 @@
 - **完全兼容 Laravel Queue 契约** —— `Queue::push / later / pop`，Laravel 业务代码**零改动**即可切换
 - **三种失败处理模式** —— `database` (Laravel `failed_jobs` 表) / `dlq` (独立 topic) / `hybrid` (重试入库 + 超限 DLQ)
 - **Key 路由保序** —— 同 key 落同分区，分区消费严格顺序
-- **时间轮分层延迟消息** —— 不用 broker 端定时器，topic 分层 + `kafka:delay:work` worker
+- **时间轮分层延迟消息** —— 不用 broker 端定时器，topic 分层 + `Queue::later`（`kafka:delay:work` worker 在路线图 v0.6）
 - **DLQ 高级特性** —— 异常类路由 (`ExceptionClassRouter`) + 滑动窗口限速 (`DlqRateLimiter`)
 - **批量消费** —— `pollBatch` + `commitBatch` 整批原子语义
 - **W3C Trace Context** —— 完整 `traceparent` 头，跨服务透传
-- **回溯 Replay** —— 按时间窗口重放 topic
+- **回溯 Replay** —— 按时间窗口重放 topic（窗口解析已实现，实际 reproduce 在路线图）
 - **Horizon 5.x 兼容** —— 复用 Horizon Lua 脚本，metrics 写到 `horizon:` 前缀
+- **Serializer 接入** —— 裸事件（非 Laravel Job）+ `JsonSerializer` 跨语言消费，`PayloadReceived` 事件（v0.5.0）
 - **KafkaFake 测试** —— 不用起 broker 也能断言 push 调用
 
-📖 **详细功能与示例**：[`docs/使用文档/README.md`](docs/使用文档/README.md)（按功能逐块展开，含可运行代码，共 16 篇）
+📖 **详细功能与示例**：[`docs/使用文档/README.md`](docs/使用文档/README.md)（按功能逐块展开，含可运行代码，共 17 篇）
 
 ---
 
@@ -180,21 +181,36 @@ php artisan kafka:work --queue=laravel-jobs
 | ✅ Replay CLI | `kafka:replay --topic=x --from=-1h --to=now` 时间窗口重放 |
 | ✅ 时间窗口解析 | `TimeWindowParser` 支持 `now` / `-1h` / `1700000000` / `2026-08-25` 格式 |
 
-### v0.4 — Horizon 兼容
+### v0.4 — Horizon 兼容 + Laravel 8 官方 API 补齐
 
 | 能力 | 说明 |
 | --- | --- |
 | ✅ Horizon metrics | 复用 Horizon 5.x Lua 脚本，metrics 写到 `horizon:` 前缀 Redis key |
 | ✅ `kafka:work --horizon-metrics` | 启动选项，启用后 `NativeHandler` 自动写 throughput + runtime |
-| ✅ `kafka:horizon:snapshot` | 模板化命令，业务方通常直接用 Horizon 自带 `horizon:snapshot` |
+| ✅ `kafka:horizon:snapshot` | v0.4.4+ 真跑 snapshot（写 `snapshot:queue:` / `snapshot:job:` zset）|
+| ✅ `Queue::size()` / `pop()` 真实实现 | v0.4.5/0.4.6：`queue:size` / `queue:work` 命令可用 |
+| ✅ `RedisFailedJobProvider` | v0.4.5：`queue:failed` / `queue:forget` / `queue:flush` 无 DB 也能用 |
+| ✅ Laravel 8 官方 API 兼容 | v0.4.5-0.4.6：`Bus::chain` / `Job::withChain` / `dispatch_sync` 等 15 项 e2e 全过 |
 
-### v0.5（路线图）
+### v0.5 — Serializer 接入 + 配置化
 
-候选方向（[CHANGELOG](docs/CHANGELOG.md) `[Unreleased]` 段）：
+| 能力 | 说明 |
+| --- | --- |
+| ✅ Serializer 真正接入 | v0.5.0：裸事件（非 Laravel Job）按 `x-serializer` decode → `PayloadReceived` 事件 |
+| ✅ `registerSerializer()` | v0.5.0：注册自定义序列化器（avro 等）|
+| ✅ Serializer 配置化 | v0.5.1：`config/kafka.php` 的 `serializer` 项（`KAFKA_SERIALIZER`），默认 php |
+| ✅ 跨语言消费 | v0.5.0：裸事件 + `JsonSerializer`，Node/Go/Python 直接 `json.loads` |
+
+### v0.6（路线图）
+
+候选方向（[CHANGELOG](docs/CHANGELOG.md)）：
 
 - `kafka:delay:work` worker + 业务代码接入
+- `kafka:replay` 实际 reproduce
+- KafkaFake `storage()` 公开 getter
+- `kafka.handlers` per-topic handler 数组路由
 - 事务 Producer（librdkafka transactional API）
-- 幂等性（`enable.idempotence=true` + 应用层 idempotency key）
+- 应用层幂等性（idempotency key；`enable.idempotence=true` 已默认开启）
 - 多 Consumer Group Fan-out 完善
 - Schema Registry / Avro 集成
 - OpenTelemetry SDK 替换手写 traceparent
@@ -206,7 +222,7 @@ php artisan kafka:work --queue=laravel-jobs
 
 | 文档 | 用途 |
 | --- | --- |
-| 📖 [**docs/使用文档/README.md**](docs/使用文档/README.md) | **详细功能 + 示例**（16 篇，按主题分块，推荐阅读入口） |
+| 📖 [**docs/使用文档/README.md**](docs/使用文档/README.md) | **详细功能 + 示例**（17 篇，按主题分块，推荐阅读入口） |
 | 📋 [docs/CHANGELOG.md](docs/CHANGELOG.md) | 完整版本变更日志 |
 
 ---
@@ -225,10 +241,12 @@ php artisan kafka:work --queue=laravel-jobs
 - `dlq` / `hybrid`：`php artisan kafka:dlq:tail laravel-jobs.dlq` 实时打印
 
 **Q4：能从历史时间点重放消息吗？**
-v0.3 起：`php artisan kafka:replay --topic=orders.events --from=-1h --to=now --target-topic=orders.events.replay`（v0.3 MVP 只做窗口校验，实际 reproduce 留 v0.5）。
+`php artisan kafka:replay --topic=orders.events --from=-1h --to=now --target-topic=orders.events.replay`（当前只做窗口校验 + 参数解析，**实际 reproduce 在路线图 v0.6**，临时方案见 [08-回溯Replay §2](docs/使用文档/08-回溯Replay.md)）。
 
 **Q5：能跨语言消费吗？**
-能。Kafka 协议天然多语言。本包 header 透传 W3C Trace Context + Laravel 标准 payload（PHP serialize），其他语言用 Kafka client 拉消息后自行反序列化（如果需要跨语言 payload 互通，可用 `JsonSerializer`）。
+能。两种方式：
+1. **Laravel Job**（`Queue::push` / `dispatch`）：payload 是 Laravel 格式（外层 JSON + `data.command` PHP serialize），跨语言只能读外层元数据
+2. **裸事件**（`Producer::send` + `JsonSerializer`，推荐跨语言）：payload 是纯 JSON，Node/Go/Python 直接 `json.loads(msg.value)` 消费。v0.5.0 起同一 `kafka:work` worker 用 `PayloadReceived` 事件处理裸事件（配置 `KAFKA_SERIALIZER=json` 见 [11-Serializer §3](docs/使用文档/11-Serializer.md)）
 
 **Q6：跟 mateusjunges/laravel-kafka 有什么区别？**
 

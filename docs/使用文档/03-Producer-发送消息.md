@@ -192,9 +192,9 @@ $traceparent = $message->header('traceparent');
 // '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'
 ```
 
-> 详细格式说明见 [14-安全连接](14-安全连接.md) 旁边的 [14-TraceContext](../README.md) 章节（注：本索引中关于 TraceContext 的详细说明在另一篇 [14-安全连接](14-安全连接.md) 之后的链接中，本版本不单独建章节，请参考 [03-Producer-发送消息](03-Producer-发送消息.md) §6）
-
-> 实际文档结构请参考 [README](README.md) 目录。
+> Trace Context 格式说明见 [TraceContext 类源码](../../src/Support/TraceContext.php)（本包自带，
+> 不单独建文档章节）。跨服务透传：produce 侧自动注入 `traceparent` header，消费侧
+> `NativeHandler` 自动带出，业务方在 handler / 事件监听里读 `$message->header('traceparent')`。
 
 ---
 

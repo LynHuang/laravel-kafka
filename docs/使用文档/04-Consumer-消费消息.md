@@ -115,8 +115,8 @@ php artisan kafka:work --batch-size=50 --batch-timeout=2000 --sleep=2
 # 长跑稳定: 1h 自动退出, supervisor 拉新进程
 php artisan kafka:work --max-time=3600
 
-# 调试: 跑 1 条退出
-php artisan kafka:work --once
+# 调试: 跑 1 条退出 (注意: kafka:work 无 --once 选项, 用 --max-jobs=1)
+php artisan kafka:work --max-jobs=1
 ```
 
 ### `queue:work` 何时该用？
@@ -232,7 +232,11 @@ php artisan kafka:work --max-jobs=1000
 
 ### 注册自定义 Handler
 
-`LaravelKafkaServiceProvider` 启动时调用 `HandlerResolver::resolve($topic, $message)` 决定用哪个 handler，业务方可重写。
+> **v0.5.2 修正**：本包**没有** `kafka.handlers` tag 机制，`HandlerResolver::resolve()` 恒返回
+> `NativeHandler`，无 per-topic 数组路由。且 **`HandlerResolver` 是 `final` 类**、
+> `WorkCommand::handle()` 构造类型提示具体类——**当前版本自定义 handler 路由暂不支持**。
+> per-topic 路由在路线图（v0.6）。裸事件（非 Laravel Job）用 `PayloadReceived` 事件处理
+> （[11-Serializer §3](11-Serializer.md#3-发裸事件非-laravel-job消费)），无需自定义 handler。
 
 ```php
 namespace App\Kafka\Handlers;
@@ -254,24 +258,14 @@ class OrderEventHandler implements HandlerInterface
 }
 ```
 
-绑定到容器（v0.3+）：
-
-```php
-// app/Providers/AppServiceProvider.php
-public function register(): void
-{
-    $this->app->tag([OrderEventHandler::class], 'kafka.handlers');
-}
-```
-
-> 注：v0.4.1 当前版本 per-topic handler 是占位，v0.5 完善为 `HandlerResolver` 支持数组路由。
+> 上述 handler 类可用，但要路由到它需要 v0.6 的 per-topic 支持。当前所有消息走 `NativeHandler`。
 
 ### HandlerResult 三种 action
 
 | action | 触发 | 副作用 |
 | --- | --- | --- |
 | `ACK` | `HandlerResult::ack()` | commit offset，worker 打印 `<info>ACK</info>` |
-| `REQUEUE` | `HandlerResult::requeue()` | 通过 producer 重新发回主 topic（`x-attempt + 1`），worker 打印 `<comment>REQUEUE</comment>` |
+| `REQUEUE` | `HandlerResult::requeue()` | **v0.5.2 当前只打印日志**（不重发主 topic），worker 打印 `<comment>REQUEUE</comment>` |
 | `DLQ` | `HandlerResult::dlq($error)` | 走 `FailedHandler`（database / dlq / hybrid），worker 打印 `<error>DLQ</error>` |
 
 ---
@@ -372,14 +366,7 @@ KAFKA_CONNECTION=analytics php artisan kafka:work --queue=laravel-jobs
 
 ## 7. 处理延迟消息（时间轮）
 
-启动 `kafka:delay:work` worker 监听所有 tier topic，到期 requeue 到主 topic：
-
-```bash
-# v0.3.1 计划中：当前版本未发布
-# php artisan kafka:delay:work --connection=default
-```
-
-当前版本（v0.4.1）：`Queue::later()` 写到 tier topic，**需要业务方自己起 worker 监听**。详见 [06-延迟消息](06-延迟消息.md)。
+`kafka:delay:work` 命令**尚未发布**（路线图 v0.6）。当前版本（v0.5.2）：`Queue::later()` 写到 tier topic，**需要业务方自己起 worker 监听**。详见 [06-延迟消息](06-延迟消息.md)。
 
 ---
 

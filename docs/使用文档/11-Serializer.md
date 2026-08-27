@@ -26,7 +26,7 @@ use LaravelKafka\Producer\Serializer\PhpSerializer;
 $serializer = new PhpSerializer();
 
 $payload = $serializer->encode(['order_id' => 123, 'amount' => 99.5]);
-// 'a:2:{s:7:"order_id";i:123;s:6:"amount";d:99.5;}'
+// 'a:2:{s:8:"order_id";i:123;s:6:"amount";d:99.5;}'  (order_id 是 8 字符, s:8)
 
 $value = $serializer->decode($payload);
 // ['order_id' => 123, 'amount' => 99.5]

@@ -36,8 +36,8 @@
 
 | # | 文档 | 内容 |
 | --- | --- | --- |
-| 12 | [事件系统](12-事件系统.md) | 6 个 Laravel 事件（`MessagePublishing` 等）、订阅方式、与失败处理协同 |
-| 13 | [KafkaFake 单元测试](13-KafkaFake测试.md) | `Kafka::fake()` 启用、4 种断言 API（`assertPushed / assertPushedOn / assertPushedTimes / assertNothingPushed`） |
+| 12 | [事件系统](12-事件系统.md) | 7 个 Laravel 事件（`MessagePublishing` / `PayloadReceived` 等）、订阅方式、与失败处理协同 |
+| 13 | [KafkaFake 单元测试](13-KafkaFake测试.md) | `Kafka::fake()` 启用、5 种断言 API（`assertPushed / assertPushedOn / assertPushedTimes / assertPushedOnTimes / assertNothingPushed`） |
 | 14 | [安全连接](14-安全连接.md) | 4 种协议（PLAINTEXT / SSL / SASL_PLAINTEXT / SASL_SSL）、证书配置、SASL 机制 |
 
 ### 运维与进阶

@@ -43,9 +43,10 @@ php artisan kafka:replay \
 
 ## 2. v0.3 MVP 限制
 
-> **当前 v0.4.1 版本**：`kafka:replay` 只做**时间窗口解析 + 参数校验**，**不**实际 reproduce 消息。
+> **当前 v0.5.2 版本**：`kafka:replay` 只做**时间窗口解析 + 参数校验**，**不**实际 reproduce 消息
+> （`ReplayCommand.php:80` warn "actual reproduce not implemented yet"）。
 
-实际 reproduce（调 `librdkafka offsetsForTimes` 找 offset，再遍历 partition 重放）留到 v0.5 完善。
+实际 reproduce（调 `librdkafka offsetsForTimes` 找 offset，再遍历 partition 重放）在路线图 v0.6，尚未实现。
 
 ### 业务方临时方案
 
@@ -232,7 +233,9 @@ print("Replayed all messages")
 ],
 ```
 
-> `preserve_partition=true` 时用原 `key` 作 partition 路由键（同 key 落同 partition）。
+> **v0.5.2 修正**：`preserve_partition` 配置键存在但**无代码消费**（replay 未实现）。
+> 以下是**设计意图**，等 v0.6 reproduce 实现后生效：
+> `preserve_partition=true` 时用原 `key` 作 partition 路由键（同 key 落同 partition）；
 > `preserve_partition=false` 时 librdkafka 轮询 partition（不保序但更均衡）。
 
 ---

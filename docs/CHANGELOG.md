@@ -5,6 +5,42 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.2] - 2026-08-27
+
+### Fixed
+
+**全量审查 17 篇使用文档 + 根 README，对照实际代码修正 50+ 处文档偏差**（v0.4.1 版本快照 vs 代码已到 v0.5.1）。
+
+#### A. 事实错误（会导致运行错误）
+
+| 文档 | 问题 → 修正 |
+| --- | --- |
+| 16-高级主题 §6.4 | **错误码表全错**：85/6/12 映射到 `__TIMED_OUT/__TRANSPORT/__INVALID_ARG` 均错。修正：内部错误码为负数（`__TIMED_OUT=-185`、`__TRANSPORT=-195`、`__INVALID_ARG=-186`），broker 协议码为正数（`NOT_LEADER_FOR_PARTITION=6`、`OFFSET_METADATA_TOO_LARGE=12`）|
+| 12-事件系统 | 全文 `$event->topic/message/error` 属性访问 → 方法 `topic()/message()/error()`；`MessageConsumed` **无 `$action`**；`MessageSentToDLQ` 是 `dlqTopic()` 不是 `topic()`；补第 7 事件 `PayloadReceived` |
+| 06-延迟消息 §6 | `Kafka::connection()->kafka()` 不存在 → 改 `ConsumerFactory::make()->kafka()` |
+| 07-DLQ运维 §8 | `KafkaConfig::kafka()` 不存在 → 改独立 `RdKafka\Consumer` |
+| 05-失败处理 | `DatabaseFailedJobHandler::log()` → `handle()`；`DlqFailedJobHandler` **无 `$rateLimiter` 参数**（示例会报错）→ 修正 |
+| 04-Consumer | `kafka:work --once` **不存在** → 改 `--max-jobs=1`；`kafka.handlers` tag 机制**不存在**（HandlerResolver 恒返回 NativeHandler 且是 final）→ 修正 |
+| 13-KafkaFake | `Kafka::assertPushedOn()` **静态调用不支持**（Facade 无 `__callStatic`）→ 全文改 `$fake = Kafka::fake(); $fake->assertPushedOn()` |
+| 09-Horizon | job 维度 metrics（`measured_jobs`/`job:<class>`）**从未写入**（`incrementJob` 无调用点）；`last_snapshot_at` 从未写入；队列名用 `x-original-topic` 非 `x-queue` |
+
+#### B. 过时（版本号 + 未实现承诺）
+
+- 各文档 "v0.4.1 当前版本" → v0.5.2；`kafka:delay:work` / `kafka:replay` reproduce / KafkaFake `storage()` 标注为**路线图 v0.6 未实现**（不再假装"v0.5 计划"）
+- 根 README "16 篇" → 17 篇；"v0.5（路线图）" → v0.5.0/0.5.1 已交付内容；`kafka:horizon:snapshot` 模板化 → 已真实现；Q4/Q5 FAQ 更新
+- 使用文档 README "6 个事件" → 7、"4 种断言" → 5
+
+#### C. 轻微
+
+- 11-Serializer PhpSerializer 示例 `s:7` → `s:8`（order_id 8 字符）
+- 03-Producer TraceContext 自指/失效链接 → 修正为源码引用
+- 05/07 DLQ header 表补 `x-original-headers` / `x-job-id`（handler 实际写入）
+- 02-配置详解补 `serializer` / `KAFKA_SERIALIZER`；queue.php 需手动加 `kafka` 连接条目（Laravel 8 resolve 对 null config 抛异常，已验证 laravel-test/config/queue.php:70）
+
+**本次只改文档，无代码变更**。0 regression。
+
+---
+
 ## [0.5.1] - 2026-08-27
 
 ### Added

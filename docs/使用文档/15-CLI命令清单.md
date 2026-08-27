@@ -13,7 +13,7 @@
 | `kafka:replay` | 时间窗口重放 | [08-回溯Replay](08-回溯Replay.md) |
 | `kafka:horizon:snapshot` | 把 metrics 快照到 Redis | [09-Horizon适配](09-Horizon适配.md) |
 
-> v0.3.1 计划：`kafka:delay:work` 监听时间轮 tier topic。
+> 路线图 v0.6：`kafka:delay:work`（监听时间轮 tier topic）尚未发布。
 
 ---
 
@@ -225,8 +225,8 @@ php artisan kafka:replay \
 
 ### v0.3 MVP 限制
 
-> 当前 v0.4.1：`kafka:replay` 只做时间窗口解析 + 参数校验，**不**实际 reproduce 消息。
-> 完整 reproduce 留到 v0.5。
+> 当前 v0.5.2：`kafka:replay` 只做时间窗口解析 + 参数校验，**不**实际 reproduce 消息
+> （`ReplayCommand.php:80` warn "actual reproduce not implemented yet"）。完整 reproduce 在路线图 v0.6。
 >
 > 业务方临时方案见 [08-回溯Replay §2](08-回溯Replay.md#2-v03-mvp-限制)。
 
@@ -259,9 +259,13 @@ php artisan kafka:horizon:snapshot --trim=48 --trim-job=48
 ### 输出
 
 ```
-[kafka:horizon:snapshot] 业务方应同时启用 Horizon 自身 snapshot 任务。
-当前命令保留参数 trim=24, trim-job=24（Horizon config 优先）
+[kafka:horizon:snapshot] v0.4.4: 真跑 snapshot (v0.4.0-0.4.3 是 stub).
+[kafka:horizon:snapshot] snapshotted 1 queue(s), 1 job(s) to prefix="horizon:" connection="horizon"
+业务方应同时启用 Horizon 自身 snapshot 任务（如果已装 Horizon）。
 ```
+
+> **v0.5.2 修正**：v0.4.4+ 已**真跑 snapshot**（写 `snapshot:queue:` / `snapshot:job:` zset，
+> v0.4.6 修 job 路径），不再是旧 stub。
 
 ### 加到 scheduler
 

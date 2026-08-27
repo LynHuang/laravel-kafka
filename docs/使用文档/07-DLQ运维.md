@@ -77,8 +77,10 @@ php artisan kafka:dlq:tail laravel-jobs.dlq --max=0
 | `x-exception-trace` | `#0 /path/to/...` | 异常 trace（截断到 `trace_truncate_bytes`） |
 | `x-original-topic` | `laravel-jobs` | 原始主 topic |
 | `x-original-partition` | `0` | 原始 partition |
-| `x-original-offset` | `12345` | 原始 offset |
+| `x-original-offset` | `12345` | 原始 offset（消费端 `Consumer::wrap()` 注入，经原 headers 带入） |
+| `x-original-headers` | `{"x-queue":"..."}` | v0.5.2：原消息 headers 的 JSON（`DlqFailedJobHandler` 追加） |
 | `x-attempts` | `3` | 重试次数（hybrid 模式时为最终 attempt） |
+| `x-job-id` | `uuid` | v0.5.2：Job 唯一 id（`DlqFailedJobHandler` 追加） |
 | `x-queue` | `laravel-jobs` | Laravel 逻辑队列名 |
 | `x-connection` | `default` | connection 名 |
 | `x-trace-id` | `abc123def456` | 追踪 ID（v0.1 兼容） |
@@ -275,13 +277,14 @@ class PruneOldDlq extends Command
         $cutoffMs = (int) (microtime(true) * 1000) - $days * 86400 * 1000;
 
         // 用 librdkafka 删除到 cutoff offset
-        $config = Kafka::config('default');
-        $lowWatermarks = $config->kafka()->queryWatermarkOffsets(
-            'laravel-jobs.dlq',
-            $low,
-            $high,
-            5000
-        );
+        // v0.5.2 修正: KafkaConfig 没有 kafka() 方法. queryWatermarkOffsets 在
+        // RdKafka\Consumer 上 (见 KafkaQueue::size() 的用法). 这里用独立 Consumer:
+        $conf = new \RdKafka\Conf();
+        $conf->set('metadata.broker.list', Kafka::config('default')->brokers());
+        $meta = new \RdKafka\Consumer($conf);
+        $low = 0;
+        $high = 0;
+        $meta->queryWatermarkOffsets('laravel-jobs.dlq', 0, $low, $high, 5000);
         // 业务方根据 cutoffMs 计算要删的 offset，调 deleteRecords API
         $this->info("Pruned DLQ messages older than $days days");
         return 0;

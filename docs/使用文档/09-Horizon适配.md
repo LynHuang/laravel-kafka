@@ -29,8 +29,12 @@ redis.call('hmset', KEYS[1], 'throughput', throughput, 'runtime', runtime)
 ### 业务方效果
 
 - Horizon dashboard `/horizon` 自动多一组"队列"显示
-- 队列名来自 `x-queue` header（与 Laravel Queue 语义一致）
+- 队列名来自 **`x-original-topic`**（物理 topic）——**v0.5.2 修正**：`NativeHandler::recordHorizonMetrics`
+  用 `$message->header(Header::ORIGINAL_TOPIC)`（物理 topic），**不是** `x-queue` header
 - metrics：throughput（处理总数）+ runtime（平均处理时间，ms）
+- **注意**：worker 只写 **queue 维度** metrics（`incrementQueue`）。**job 维度**（`measured_jobs` /
+  `job:<class>` hash）当前**不写入**——`incrementJob` 方法存在但无调用点，dashboard 的
+  "Job:" 面板不会显示本包数据
 
 ---
 
@@ -94,25 +98,31 @@ php artisan kafka:work \
 
 ## 4. Redis key 格式
 
-| Key | 类型 | 内容 | 来源（Lua 脚本） |
+| Key | 类型 | 内容 | 来源（Lua 脚本 / 命令） |
 | --- | --- | --- | --- |
-| `<prefix>measured_queues` | Set | queue 名列表（带 `queue:` 前缀） | `sadd` |
-| `<prefix>queue:<queueName>` | Hash | `{throughput: int, runtime: float}` | `hmset` |
-| `<prefix>measured_jobs` | Set | job 类名列表（带 `job:` 前缀） | `sadd` |
-| `<prefix>job:<className>` | Hash | `{throughput: int, runtime: float}` | `hmset` |
-| `<prefix>snapshot:queue:<queueName>` | Sorted Set | 历史快照（业务方调 `kafka:horizon:snapshot` 写入） | 业务命令 |
-| `<prefix>last_snapshot_at` | String | 最后 snapshot timestamp | 业务命令 |
+| `<prefix>measured_queues` | Set | queue 名列表（带 `queue:` 前缀） | Lua `sadd`（worker 写 queue 维度） |
+| `<prefix>queue:<queueName>` | Hash | `{throughput: int, runtime: float}` | Lua `hmset`（worker 写） |
+| `<prefix>measured_jobs` | Set | job 类名列表（带 `job:` 前缀） | **v0.5.2 不写入**（`incrementJob` 无调用点） |
+| `<prefix>job:<className>` | Hash | `{throughput: int, runtime: float}` | **v0.5.2 不写入** |
+| `<prefix>snapshot:queue:<queueName>` | Sorted Set | queue 历史快照 | `kafka:horizon:snapshot` 命令（v0.4.4+ 真跑） |
+| `<prefix>snapshot:job:<className>` | Sorted Set | job 历史快照（v0.4.6 起写对路径） | `kafka:horizon:snapshot` 命令 |
+| `<prefix>last_snapshot_at` | String | 最后 snapshot timestamp | **v0.5.2 不写入**（本包命令只写 snapshot: zset） |
 
 `<prefix>` 默认 `horizon:`（与 Horizon config 一致，业务方可自定义）。
 
 ### 示例（默认 prefix）
 
 ```
-horizon:measured_queues                     → {"queue:laravel-jobs"}
-horizon:queue:laravel-jobs                  → {throughput: 1234, runtime: 5.6}
-horizon:measured_jobs                       → {"job:App\\Jobs\\SendOrderEmail"}
-horizon:job:App\\Jobs\\SendOrderEmail       → {throughput: 1000, runtime: 4.2}
+horizon:measured_queues                     → {"queue:laravel-jobs"}      ← worker 写入
+horizon:queue:laravel-jobs                  → {throughput: 1234, runtime: 5.6}  ← worker 写入
+horizon:measured_jobs                       → {"job:App\\Jobs\\SendOrderEmail"}  ← v0.5.2 不写入
+horizon:job:App\\Jobs\\SendOrderEmail       → {throughput: 1000, runtime: 4.2}   ← v0.5.2 不写入
+horizon:snapshot:queue:laravel-jobs         → zset（kafka:horizon:snapshot 写入）
 ```
+
+> **v0.5.2 修正**：worker 只写 **queue 维度** metrics。`measured_jobs` / `job:<class>` hash
+> 不会被本包填充（`incrementJob` 定义了但没调用）——Horizon dashboard 的 Job 面板不显示本包数据。
+> `last_snapshot_at` 也不写入（本包 `kafka:horizon:snapshot` 只写 snapshot: zset）。
 
 ### runtime 计算
 
@@ -126,7 +136,9 @@ runtime_new = ((throughput_old * runtime_old) + current_runtime_ms) / (throughpu
 
 ## 5. `kafka:horizon:snapshot` 命令
 
-> 模板化命令，业务方通常用 Horizon 自带的 `horizon:snapshot`（更完整）。
+> **v0.5.2 修正**：该命令 v0.4.4+ 已**真跑 snapshot**（非模板/占位），把当前 metrics 移到
+> `snapshot:queue:` / `snapshot:job:` zset（v0.4.6 修 job 路径）。业务方也可用 Horizon 自带的
+> `horizon:snapshot`（更完整，写 `last_snapshot_at`）。
 
 ```bash
 php artisan kafka:horizon:snapshot \
