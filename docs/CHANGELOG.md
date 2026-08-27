@@ -5,6 +5,39 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.9] - 2026-08-27
+
+### Fixed
+
+v0.4.8 之后 CI 跑 PHPStan 报 1 error：`RedisFailedJobProvider::flush()` 缺 `$hours` 参数。
+
+#### 1. `RedisFailedJobProvider::flush($hours = null)` 兼容 Laravel 8/9/10/11 接口差异
+
+**症状**（CI linter fail）：
+```
+Error: Method RedisFailedJobProvider::flush() overrides method
+FailedJobProviderInterface::flush() but misses parameter #1 $hours.
+```
+
+**根因**：Laravel 8 的 `FailedJobProviderInterface::flush()` **无参数**，Laravel 9/10/11
+是 `flush($hours = null)` **带参数**。v0.4.8 的 `flush()` 只匹配 Laravel 8——CI matrix
+里 Laravel 11 组合报"缺 $hours 参数"。
+
+**修法**（`src/Queue/Failed/RedisFailedJobProvider.php`）：
+- 签名改 `flush($hours = null)`（兼容两个版本）
+- 实现 `$hours` 语义：
+  - `$hours = null`（`queue:flush` 命令）→ **全部清空**
+  - `$hours` 非 null（`queue:prune-failed --hours=N` 命令）→ 只删超过 N 小时前的 failed jobs
+
+**验证**：
+- 本地 phpstan 0 errors + phpunit 137/287 全过
+- probe30 9/9 全过（flush 端到端没破坏）
+- CI matrix 5 个组合（Laravel 8/9/10/11）都跑过 linter
+
+**0 regression**。
+
+---
+
 ## [0.4.8] - 2026-08-27
 
 ### Fixed

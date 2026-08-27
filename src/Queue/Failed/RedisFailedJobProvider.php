@@ -178,21 +178,47 @@ final class RedisFailedJobProvider implements FailedJobProviderInterface
     }
 
     /**
-     * 清空所有 failed jobs（`queue:flush` 命令调用）。
+     * 清空 failed jobs（`queue:flush` / `queue:prune-failed` 命令调用）。
      *
+     * ## $hours 语义（v0.4.9 兼容 Laravel 8/9/10/11 接口差异）
+     *
+     * - Laravel 8 接口：`flush()` 无参数 → $hours=null → **全部清空**
+     * - Laravel 9/10/11 接口：`flush($hours)` → $hours 非 null → 只删超过 $hours 小时前的
+     * - `queue:flush` 命令：调 `flush()` 无参数 = 全清
+     * - `queue:prune-failed --hours=N` 命令：调 `flush($hours)` = 只删 N 小时前
+     *
+     * @param int|null $hours 保留小时数（null = 全部清空）
      * @return void
      */
-    public function flush()
+    public function flush($hours = null)
     {
         /** @var \Illuminate\Redis\Connections\Connection $conn */
         $conn = $this->redis();
         $uuids = (array) $conn->zrange($this->listKey, 0, -1);
-        if (! empty($uuids)) {
-            foreach ($uuids as $uuid) {
+
+        $cutoffMs = null;
+        if ($hours !== null) {
+            $cutoffMs = (int) ((time() - ((int) $hours * 3600)) * 1000);
+        }
+
+        foreach ($uuids as $uuid) {
+            $shouldDelete = true;
+            if ($cutoffMs !== null) {
+                $data = $this->find($uuid);
+                $failedAtMs = (int) ($data['timestamp'] ?? 0);
+                // 只删超过 cutoff 时间点的 (旧的)
+                $shouldDelete = $failedAtMs <= $cutoffMs;
+            }
+            if ($shouldDelete) {
                 $conn->del($this->hashPrefix . $uuid);
+                $conn->zrem($this->listKey, $uuid);
             }
         }
-        $conn->del($this->listKey);
+
+        // $hours=null (queue:flush) 时 listKey 也清空; $hours 非 null (prune) 时保留剩余
+        if ($hours === null) {
+            $conn->del($this->listKey);
+        }
     }
 
     /**
