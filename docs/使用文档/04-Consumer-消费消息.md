@@ -62,6 +62,105 @@ stopwaitsecs=30
 
 ---
 
+## 1.5 `kafka:work` vs Laravel 8 原生 `queue:work`（重要）
+
+> **TL;DR**：本包**强烈推荐用 `kafka:work`**。Laravel 8 原生 `queue:work` 在 v0.4.6 起**也能消费 Kafka 消息**，但**性能差 5000 倍**（消息延迟 1ms → 5s），仅在**不能换命令名**的极特殊场景下用。
+
+### 行为差异
+
+| 维度 | `kafka:work`（本包命令）| `queue:work`（Laravel 8 原生）|
+| --- | --- | --- |
+| **实现路径** | 走 `WorkCommand` → `ConsumerFactory::make()` + `Consumer::poll()` 长轮询 | 走 Laravel `Worker` → `KafkaQueue::pop()` 循环 |
+| **消息延迟** | **~1 ms**（librdkafka 同步阻塞，broker 主动推 0~1ms 到达）| **~5 秒**（pop 阻塞 1s + Worker sleep 3s + 处理 + 下一轮 1s）|
+| **批量消费** | ✅ `--batch-size` / `--batch-timeout` | ❌ 单条循环 |
+| **失败处理** | `FailedHandler` 三模式（database / dlq / hybrid）| 同上（Laravel Worker 调 `$job->fail()`）|
+| **horizon metrics** | ✅ `--horizon-metrics` 选项 | ❌ |
+| **`queue:failed`/`queue:forget` 管理命令** | ✅（v0.4.5 起配 `failed.driver = 'kafka-redis'`）| ✅（同上）|
+| **业务方业务方代码兼容性** | ✅ 业务方按 Laravel 标准 Job 写 | ✅ 业务方按 Laravel 标准 Job 写 |
+
+### 为什么 `queue:work` 慢 5000 倍？
+
+```php
+// Laravel Worker 循环 (queue:work)
+while (true) {
+    $job = $connection->pop($queue);     // ← KafkaQueue::pop() 阻塞 1s
+    if ($job === null) {
+        $this->sleep($options->sleep);    // ← 默认 sleep 3s!
+        continue;
+    }
+    $this->process($connection, $job);    // 处理
+}
+
+// kafka:work 循环 (本包)
+while (true) {
+    $msg = $consumer->consume(1000);     // ← librdkafka 阻塞 1s
+    if ($msg) {
+        $handler->handle($msg);            // 立即处理
+    }
+    // 无 sleep: broker 主动推, 消息 0~1ms 到达
+}
+```
+
+`queue:work` 的 3s sleep 是 Laravel 8 假设 `pop()` 是 Redis/SQL 那种"快查快返"设计的——Kafka 长轮询优势被 sleep 隔断。
+
+### `kafka:work` 调优建议（业务方业务方生产场景）
+
+```bash
+# 默认: sleep 1s, 单条处理, 无限运行 — 中等吞吐
+php artisan kafka:work
+
+# 高吞吐: 批量消费 + 略长 sleep
+php artisan kafka:work --batch-size=50 --batch-timeout=2000 --sleep=2
+
+# 长跑稳定: 1h 自动退出, supervisor 拉新进程
+php artisan kafka:work --max-time=3600
+
+# 调试: 跑 1 条退出
+php artisan kafka:work --once
+```
+
+### `queue:work` 何时该用？
+
+| 业务方业务方场景 | 推荐 |
+| --- | --- |
+| 新项目 / 新部署 | ✅ `kafka:work` |
+| 业务方业务方业务场景下想"无缝切换 Redis 队列到 Kafka 队列"（不改业务方业务方业务代码）| ✅ `queue:work`（v0.4.6 起 work）|
+| 业务方业务方业务场景下需要 Laravel `Horizon` 监控 + 标准 `queue:work` 集成 | ✅ `queue:work` |
+| 业务方业务方业务场景下高性能 / 低延迟（秒杀 / 抢购 / 实时数据）| ✅ `kafka:work`（必选）|
+| 业务方业务方业务场景下 batch 处理 | ✅ `kafka:work --batch-size=N` |
+
+### 业务方业务方业务场景配置
+
+**`kafka:work`**：在 supervisor / systemd 直接调命令（见上面 §1 典型部署）。
+
+**`queue:work`**：业务方业务方业务场景下需要 `failed.driver = 'kafka-redis'` 让 `queue:failed` / `queue:forget` 命令 work（v0.4.5 已支持）：
+
+```php
+// config/queue.php
+'failed' => [
+    'driver' => 'kafka-redis',
+    'connection' => 'default',
+    'list_key' => 'kafka:failed_jobs',
+    'hash_prefix' => 'kafka:failed_job:',
+    'max_items' => 1000,
+],
+```
+
+**两者用同一个 `KAFKA_GROUP_ID`**：业务方业务方业务场景下两个 worker 一起跑会**抢 partition**——**不要混用**同一 group_id 跑 `kafka:work` + `queue:work`。
+
+### 实测验证
+
+`laravel-test/probe32-queue-work.php` 9/9 全过：
+- push 1 条 `StandardOrderJob` → `queue:work --once` 0.18s 真消费，handle log 含 `order_id: 32001`
+- `queue:work` 长跑 8s 消费 2 条消息
+
+### 相关变更
+
+- **v0.4.5**：`KafkaQueue::pop()` 永远 null，`queue:work` 完全不能消费
+- **v0.4.6**：`pop()` 实现 1000ms 阻塞 poll + 包装 KafkaJob，`queue:work` 能 work（trade-off：5s 延迟）
+
+---
+
 ## 2. 批量消费
 
 ```bash
