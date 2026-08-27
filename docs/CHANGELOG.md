@@ -5,6 +5,38 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.5] - 2026-08-28
+
+### Added
+
+**事务 Consumer 文档**——v0.5.4 加事务 Producer 时**遗漏了**消费端怎么用，本版本补齐。
+
+#### 文档
+
+`docs/使用文档/04-Consumer-消费消息.md` 新增 **§1.6 事务 Consumer**（~250 行）：
+
+- **核心配置**：`isolation.level=read_committed`（默认已配，**生产不要改**）
+- **核心语义**：read_committed 看不到 aborted 消息；同 partition 消息按 send 顺序；跨事务按 commit 顺序
+- **offset 提交时机**：必须在 handler 成功处理**之后**——poll 到就 commit 会丢消息；`kafka:work` 已经在 `KafkaJob::delete()` 正确处理
+- **失败处理对照表**：Producer 端 `abortTransaction`（消息不可见）vs Consumer 端 throw → 重试 / DLQ（**没有 abort 概念**）
+- **完整示例**：
+  - 方式 A：Laravel Job 消费事务消息（推荐）
+  - 方式 B：NativeHandler 处理裸 JSON 事件
+- **常见误区** 8 条（手动 commit offset / abort 消息进 DLQ / read_uncommitted 调试等）
+- **Producer/Consumer 事务对照表**
+
+#### 03 §7.5 同步
+
+`docs/使用文档/03-Producer-发送消息.md` §7.5 末尾加交叉引用 → [04 §1.6](04-Consumer-消费消息.md#16-事务-consumerv054-配套)。
+
+#### 验证
+
+- **0 代码变更**——纯文档 release
+- 文档风格/术语与 v0.5.2 全量审查后一致
+- 探针沿用 `laravel-test/probe42-transaction.php`（6/7 OK，v0.5.4 已验证）
+
+---
+
 ## [0.5.4] - 2026-08-28
 
 ### Added

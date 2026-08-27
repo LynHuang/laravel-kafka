@@ -314,6 +314,10 @@ try {
 - commit 事务 send 2 条 → read_committed consumer 可见
 - abort 事务 send 1 条 → read_committed consumer **不可见**（占位 offset 但被跳过）
 
+### 消费端配套
+
+事务 Producer 让生产端"全成功或全不可见"——但消费端要正确处理事务消息（offset 提交时机、失败处理、读 committed 语义）需要专门了解，见 [04 §1.6 事务 Consumer](04-Consumer-消费消息.md#16-事务-consumerv054-配套)。
+
 ---
 
 ## 8. 同步 vs 异步

@@ -18,7 +18,7 @@
 | # | 文档 | 内容 |
 | --- | --- | --- |
 | 03 | [Producer — 发送消息](03-Producer-发送消息.md) | `Queue::push / pushRaw`、Key 路由保序、自定义 Header、W3C Trace Context、低层 `Producer` API |
-| 04 | [Consumer — 消费消息](04-Consumer-消费消息.md) | `kafka:work` 命令、批量消费（`--batch-size`）、优雅退出、低层 `Consumer` API、**`kafka:work` vs `queue:work` 性能对比** |
+| 04 | [Consumer — 消费消息](04-Consumer-消费消息.md) | `kafka:work` 命令、批量消费（`--batch-size`）、优雅退出、低层 `Consumer` API、**`kafka:work` vs `queue:work` 性能对比**、**事务 Consumer（v0.5.4 配套，§1.6）** |
 | 05 | [失败处理](05-失败处理.md) | database / dlq / hybrid 三种模式、retry 流程、`ExceptionClassRouter` 异常路由、`DlqRateLimiter` 限速 |
 
 ### 高级特性

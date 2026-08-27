@@ -161,6 +161,249 @@ php artisan kafka:work --max-jobs=1
 
 ---
 
+## 1.6 事务 Consumer（v0.5.4 配套）
+
+> **配套阅读**：事务 Producer 见 [03 §7.5](03-Producer-发送消息.md#75-事务-producerv054)。
+
+事务 Producer 让生产端"全成功或全不可见"——但消费端要正确处理事务消息，需要了解 4 件事。
+
+### 1. 核心配置：`isolation.level=read_committed`
+
+```php
+// config/kafka.php
+'consumer' => [
+    'isolation_level' => env('KAFKA_ISOLATION_LEVEL', 'read_committed'),
+    //                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    // 关键: 不看到 aborted 事务消息, 只看到已 commit 的事务消息
+],
+```
+
+- **`read_committed`**（生产必选）：aborted 事务消息**不可见**；commit 消息可见
+- **`read_uncommitted`**（仅调试）：能看 aborted 占位；破坏业务原子语义，**生产禁用**
+
+> ⚠️ 本包 config 默认就是 `read_committed`，业务方**不要**改成 `read_uncommitted`，否则事务语义失效。
+
+### 2. 核心语义：consumer 看到了什么
+
+```
+Broker 事务流                                       read_committed consumer 看到
+─────────────────────────────────────────          ──────────────────────────────
+TXN-1: send 2 条 → begin                          (空)
+TXN-1: commit                                     2 条消息按 send 顺序
+TXN-2: send 1 条 → begin                          (空)
+TXN-2: abort                                      (空, 占位 offset 跳过)
+TXN-3: send 3 条 → begin                          (空)
+TXN-3: commit                                     3 条消息按 send 顺序
+```
+
+**关键事实**：
+
+1. **同一事务的消息按 send 顺序到达 consumer**（broker 端 partition 内有序）
+2. **跨事务的消息严格按 commit 顺序**（TXN-1 commit 早于 TXN-3 → consumer 看到 TXN-1 早于 TXN-3）
+3. **aborted 消息占 offset 但不返回**（consumer poll 时被 librdkafka 内部过滤）
+4. **consumer 端没有"事务"概念**——看到的还是单条消息，只是中间穿插了"事务边界"
+   - librdkafka 内部维护 `LSO`（Last Stable Offset），read_committed consumer poll 时跳过 LSO 之前的未 commit 消息
+   - 业务方在 Handler 里**完全不需要**关心事务边界，按正常单条消息处理即可
+
+### 3. offset 提交时机（最重要的实践）
+
+```
+                  业务方 handler 处理
+                  ↓
+  poll 消息 ────→ 写 DB / 调 RPC / 通知 ────→ handler 返回 true
+                                                 ↓
+                                          KafkaJob::delete()
+                                          (commit offset 到 broker)
+```
+
+**原则**：offset 提交**必须**在 handler 成功处理完**之后**。
+
+- ✅ handler 处理成功 → `KafkaJob::delete()` → 提交 offset → 业务才算完成
+- ❌ poll 到消息就 commit offset → 处理失败时 offset 已提交 → **消息丢失**
+
+`kafka:work` 已经在 `KafkaJob::delete()` 里手动 commit offset（不依赖 librdkafka 自动 commit），业务方只需要：
+
+- handler 正常 return → 框架自动 commit offset
+- handler 抛异常 → 框架走重试 / DLQ（v0.1 failed 三模式），**不会** commit offset
+- handler 调 `$job->fail($e)` → 写 failed_jobs，commit offset，**不**再重试
+
+> 不要在自己的 handler 里手动 commit offset。`KafkaJob::delete()` 是唯一入口。
+
+### 4. 失败处理：consumer 端没有 abort，只能 DLQ
+
+| 场景 | Producer 端 | Consumer 端 |
+|---|---|---|
+| 业务正常 | `commitTransaction()` | handler return → offset commit |
+| 业务异常 | `abortTransaction()` | handler throw → 重试 / DLQ |
+
+**Consumer 端没有"事务回滚"概念**——因为消费端没有"已经 commit 的消息可以撤回"这种语义。能做的只有：
+
+```php
+// NativeHandler 写法
+$handler = new NativeHandler(function ($message) {
+    $payload = json_decode($message->payload(), true);
+
+    // 业务校验失败 → 抛异常 → 框架走 DLQ
+    if (empty($payload['user_id'])) {
+        throw new \InvalidArgumentException('user_id 缺失');
+    }
+
+    // 调外部 RPC 失败 → 抛异常 → 框架走重试 (max_attempts 内)
+    $this->httpClient->post('https://inventory.example.com/decrement', $payload);
+});
+```
+
+- **可重试异常**（网络抖动、临时 5xx）→ Kafka 失败处理按 `max_attempts` 重试
+- **不可重试异常**（参数缺失、数据格式错）→ 在 `fatal_exceptions` 列表里 → 直接 DLQ 不再重试
+- **业务侧需要"精确一次"消费** → 用 `x-idempotency-key` header 业务层去重（v0.6 backlog）
+
+### 5. 完整示例：消费事务消息
+
+#### 方式 A：Laravel Job（推荐）
+
+`app/Jobs/ProcessOrderCreated.php`：
+
+```php
+<?php
+
+namespace App\Jobs;
+
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+
+class ProcessOrderCreated implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public function __construct(public array $orderData) {}
+
+    public function handle(): void
+    {
+        // 业务处理: 发邮件 / 更新统计 / 通知仓库
+        \Log::info('Order created', $this->orderData);
+    }
+
+    // 可选: 失败时的钩子
+    public function failed(\Throwable $e): void
+    {
+        // 业务方通知: Slack / 钉钉 / PagerDuty
+        \Log::error('Order processing failed', [
+            'order_id' => $this->orderData['order_id'] ?? null,
+            'error'    => $e->getMessage(),
+        ]);
+    }
+}
+```
+
+生产端发事件：
+
+```php
+// app/Http/Controllers/OrderController.php
+use App\Jobs\ProcessOrderCreated;
+use App\Events\InventoryDecremented;
+
+$producer->beginTransaction();
+try {
+    // 写 orders 事件 (Laravel Job 格式)
+    Queue::pushOn('orders-events', new ProcessOrderCreated($orderData));
+
+    // 写 inventory 事件 (裸 JSON 事件)
+    $producer->send('inventory-events', new Message(
+        json_encode(['event' => 'inventory.decremented', 'sku' => $sku, 'delta' => -1]),
+        ['x-serializer' => 'json'],
+        $sku,
+    ));
+
+    $producer->commitTransaction(15000);
+} catch (\Throwable $e) {
+    $producer->abortTransaction(15000);
+    throw $e;
+}
+```
+
+消费端 worker：
+
+```bash
+# 订阅 orders-events (Laravel Job 格式), 走 failed handler
+php artisan kafka:work --queue=orders-events
+
+# 订阅 inventory-events (裸 JSON 格式), 用 NativeHandler
+php artisan kafka:work --queue=inventory-events
+```
+
+#### 方式 B：NativeHandler（裸事件，不走 Laravel Job）
+
+`app/Kafka/Handlers/InventoryDecrementedHandler.php`：
+
+```php
+<?php
+
+namespace App\Kafka\Handlers;
+
+use LaravelKafka\Consumers\NativeHandler;
+
+class InventoryDecrementedHandler extends NativeHandler
+{
+    public function handle(\LaravelKafka\Producer\Message $message): void
+    {
+        $payload = json_decode($message->payload(), true);
+
+        // 业务处理: 同步更新本地缓存 / 触发下游
+        Cache::decrement("inventory:{$payload['sku']}", abs($payload['delta']));
+    }
+}
+```
+
+注册到 kafka:work（v0.6 backlog 里有 `kafka.handlers` 路由数组，目前用 `--handler` 选项单 handler）：
+
+```bash
+php artisan kafka:work \
+    --queue=inventory-events \
+    --handler="App\Kafka\Handlers\InventoryDecrementedHandler"
+```
+
+### 6. 验证：怎么确认 read_committed 工作正常
+
+`laravel-test/probe42-transaction.php` 验证：
+
+```
+✅ commit 事务 send 2 条 → read_committed consumer 看到 2 条
+✅ abort  事务 send 1 条 → read_committed consumer 看到 0 条
+```
+
+业务方本地跑：
+
+```bash
+cd laravel-test
+php probe42-transaction.php
+# 看到 7 OK, 0 FAIL 即可
+```
+
+### 7. 常见误区（必看）
+
+| 误区 | 实际 |
+|---|---|
+| "Consumer 端需要调 commitTransaction 提交" | ❌ Consumer 端没有事务 API。事务只在 Producer 端 |
+| "abort 消息会进 DLQ" | ❌ aborted 消息在 broker 端被跳过，read_committed consumer 根本看不到 |
+| "可以在 handler 里手动 commit offset 提前释放" | ❌ 会丢消息。handler 成功 return → 框架自动 commit；失败 throw → 框架走重试 / DLQ |
+| "我可以用 read_uncommitted 看 aborted 消息做调试" | ⚠️ 仅本地调试。生产用 → 破坏业务原子语义 |
+| "事务消息会乱序到达 consumer" | ❌ 同一 partition 内严格按 send 顺序；跨事务按 commit 顺序 |
+
+### 8. 与 Producer 事务的对照
+
+| 维度 | Producer 端 | Consumer 端 |
+|---|---|---|
+| 事务 API | `beginTransaction` / `commitTransaction` / `abortTransaction` | 无（只能 commit offset / DLQ） |
+| 可见性控制 | `transactional_id`（必填） | `isolation_level`（默认 read_committed） |
+| 失败回滚 | `abortTransaction()`（消息全不可见）| 抛异常 → 重试 / DLQ（消息已 commit 不可撤回）|
+| 消息保证 | 原子（要么全 commit 要么全 abort） | 至少一次（重试） + 业务去重（幂等）= 精确一次 |
+| 关键配置 | `producer.transactional_id` | `consumer.isolation_level` |
+
+---
+
 ## 2. 批量消费
 
 ```bash

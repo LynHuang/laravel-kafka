@@ -168,6 +168,21 @@ phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.0 节
 
 ---
 
+## v0.5.5 已完成 (2026-08-28)
+
+**事务 Consumer 文档**——v0.5.4 加事务 Producer 时**遗漏了消费端文档**，业务方使用时会问"消费端怎么用 / offset 怎么提交 / 失败了怎么办"。本版本补齐。
+
+- `docs/使用文档/04-Consumer-消费消息.md` §1.6 加 ~250 行：
+  - 核心配置 + 核心语义 + offset 提交时机 + 失败处理对照
+  - 完整示例（Laravel Job 方式 + NativeHandler 方式）
+  - 8 条常见误区 + Producer/Consumer 事务对照表
+- `03-Producer-发送消息.md` §7.5 末尾加交叉引用
+- **0 代码变更**（纯文档 release）
+
+**0 regression**。详见 `docs/CHANGELOG.md` v0.5.5 节。
+
+---
+
 ## 长期 backlog（v0.6+ 考虑）
 
 ### 1. 业务方 laravel-test 项目的清理
