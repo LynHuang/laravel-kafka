@@ -5,6 +5,70 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.4] - 2026-08-27
+
+### Fixed
+
+v0.4.3 业务方跑通 push 链路 + DLQ 链路后, 用本机 Redis 测 Horizon metrics 集成,
+发现 v0.4.0-0.4.3 Horizon 集成在 Laravel 8.x 上**实际不可用**. v0.4.4 修 3 个文件:
+
+#### 1. HorizonMetricsRecorder 穿透 phpredis + SCRIPT LOAD / EVALSHA
+
+`src/Horizon/HorizonMetricsRecorder.php` — 原实现用 Laravel 包装的
+`PhpRedisConnection::eval()` 调 Lua, **不执行** (返回 false 不抛错, silent fail).
+
+**修法**:
+- 穿透到 phpredis client (`$conn->client()`)
+- 用 `SCRIPT LOAD` 缓存 Lua 脚本 SHA1 (静态变量复用)
+- 用 `EVALSHA` 执行 (避开 phpredis eval 在 Laravel OPT_PREFIX 模式下的返回值 bug)
+- Public API 签名不变 (保持 unit test mock 不破)
+
+#### 2. HorizonSnapshot 去 transaction 包装
+
+`src/Horizon/HorizonSnapshot.php` — 原 `snapshotQueue` 用
+`$conn->transaction(fn => $trans->execute())`, 但 phpredis 实际方法是 `exec()` 不是
+`execute()` (predis 才是 execute). 抛 'Call to undefined method Redis::execute()'.
+
+**修法**: 不用 transaction 包装, 直接 sequential calls (hmget + del). 接受
+race condition (snapshot 后台跑, 短时双写不影响 metrics).
+
+#### 3. HorizonSnapshotCommand 真实现 + 处理双 prefix
+
+`src/Console/HorizonSnapshotCommand.php` — v0.4.0-0.4.3 handle() 是 stub
+(只 info + warn, 没真调 HorizonSnapshot). v0.4.4 真实现:
+
+- 调 HorizonSnapshot::snapshotQueue() 给每个 measured_queue/measured_job 写快照
+- 处理 Laravel PhpRedisConnection OPT_PREFIX 双 prefix bug (smembers 拿到的
+  key 已带 `laravel_database_` 前缀, snapshotQueue 又会加一遍 → 手动 strip)
+
+#### 业务方实测 (laravel-test + Redis 127.0.0.1:6379)
+
+probe28 验证完整端到端:
+
+```
+[probe28] 5 calls done
+[probe28] queue:laravel-jobs hash: {"throughput":"2","runtime":"10.4"}
+[probe28] queue:emails hash: {"throughput":"1","runtime":"5"}
+[probe28] job:TestOrderJob hash: {"throughput":"2","runtime":"17.5"}
+[probe28] measured_queues: ["laravel_database_horizon:queue:emails","laravel_database_horizon:queue:laravel-jobs"]
+[probe28] measured_jobs: ["laravel_database_horizon:job:App\\Jobs\\TestOrderJob"]
+
+[probe28] 跑 kafka:horizon:snapshot:
+[probe28] snapshot exit code: 0
+[probe28] snapshot output: snapshotted 2 queue(s), 1 job(s) to prefix="horizon:" connection="default"
+
+[probe28] after snapshot:
+  laravel_database_horizon:snapshot:queue:emails = {"{\"throughput\":1,\"runtime\":5,\"time\":1787801609}":1787801609}
+  laravel_database_horizon:snapshot:queue:laravel-jobs = {"{\"throughput\":2,\"runtime\":10.4,\"time\":1787801609}":1787801609}
+  laravel_database_horizon:snapshot:queue:App\Jobs\TestOrderJob = {...}  # 注: 见下方技术债
+  queue:laravel-jobs hash after snapshot: [] (正确, 被 del)
+```
+
+#### 已知技术债务 (留 v0.4.5)
+
+- snapshot job 写到 `snapshot:queue:<className>` 而不是 `snapshot:job:<className>`
+  (HorizonSnapshot::snapshotQueue 不识别 `job:` 前缀, 需要新方法 `snapshotJob`)
+
 ## [0.4.3] - 2026-08-27
 
 ### Fixed
