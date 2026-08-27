@@ -269,6 +269,37 @@ $producer->flush(5000);  // 等所有 in-flight 消息投递完成，最多 5s
 
 librdkafka **transactional API**：事务内多条消息原子交付（全成功或全不可见）。
 
+### 何时用 vs 何时不用事务（重要，先看）
+
+事务**不是万能药**——它有真实代价，先按这个表判断要不要用：
+
+| 场景 | 推荐做法 | 原因 |
+|---|---|---|
+| **单节点应用**（单进程 / 单 pod）| ❌ **避免使用事务**，用 Laravel `DB::transaction` 包 | 见下方"为什么单节点避免" |
+| **单 DB + 单服务**（例：单体 Laravel app）| ❌ **避免使用事务** | 同上 |
+| **多节点部署 + 需要"消息 + DB"原子**（微服务）| ✅ **推荐使用事务** | 跨进程/跨服务原子保证 |
+| **多 topic 发消息需要原子**（例：下单 + 扣库存）| ✅ **推荐使用事务** | Kafka 层原子，不依赖 DB 事务 |
+| **单 topic 简单 push 通知** | ❌ **不需要事务** | 过度设计 |
+| **批量发消息，允许部分失败** | ❌ **不需要事务** | 用普通 produce + DLQ |
+
+#### 为什么单节点应用应避免事务
+
+1. **同一 producer 同时只能跑 1 个事务**——多个用户并发下单需要 Mutex 串行化，QPS 受限
+2. **initTransactions 每次 ~10ms**——单事务全流程 ~20-50ms，对比普通 produce ~2ms，**慢 10-25 倍**
+3. **`transactional_id` 必须唯一**——单节点部署多个 web 进程（fpm 多 worker / octane 多 worker）会冲突，需要"按 worker 进程 pid 后缀"，运维复杂
+4. **DB 事务就够了**——单进程下"Laravel `DB::transaction` + 普通 `Queue::push`"已经是原子语义，再加 Kafka 事务是**双层事务嵌套**（容易踩"DB commit 后 Kafka commit 失败"导致数据不一致）
+
+> **业务方决策流程**：你的应用是**单进程 / 单服务 / 微服务**？
+>
+> - 单进程 / 单服务 → 用 Laravel `DB::transaction` + 普通 push，**不要碰事务 Producer**
+> - 多服务 / 多 broker / 需要跨 topic 原子 → 用本节事务 Producer
+
+#### 多节点部署的运维注意
+
+- **每个 pod 一个 transactional_id**（用 `${POD_NAME}` 后缀）
+- 不能所有 pod 共用一个 `KAFKA_TRANSACTIONAL_ID`——broker 会 fence 冲突
+- 滚动升级时旧 pod 退出 → 新 pod 用同 id（前提是旧 pod 已优雅退出，让 broker 释放 epoch）
+
 ### 配置
 
 ```php

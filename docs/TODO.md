@@ -183,6 +183,25 @@ phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.0 节
 
 ---
 
+## v0.5.6 已完成 (2026-08-28)
+
+**事务使用决策 + Consumer 端幂等性**——业务方两次关键反馈（v0.5.5 文档**没明确**指出）：
+
+1. **单节点应用应避免事务**——同 producer 单事务串行 + ~10ms init 开销 + 多进程冲突
+2. **Consumer 端必须做幂等性**——事务仅 Producer 端原子，Consumer 重试 / 崩溃会重复消费
+
+- `03-Producer-发送消息.md` §7.5 头部加 "何时用 vs 何时不用事务" 决策表 + 单节点避免 4 原因
+- `04-Consumer-消费消息.md` §1.6 头部加核心警告框（Consumer 必修幂等）
+- `04-Consumer-消费消息.md` §1.6 加 §9 消费端幂等性最佳实践（~180 行）：
+  - 3 个重复来源 + 幂等 key 设计原则
+  - 3 种实现方式（DB 唯一索引 / Redis SETNX / 业务表 UNIQUE）
+  - 选型决策表 + 完整端到端示例 + 真实事故案例
+- **0 代码变更**（纯文档 release）
+
+**0 regression**。详见 `docs/CHANGELOG.md` v0.5.6 节。
+
+---
+
 ## 长期 backlog（v0.6+ 考虑）
 
 ### 1. 业务方 laravel-test 项目的清理

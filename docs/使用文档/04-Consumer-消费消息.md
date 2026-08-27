@@ -165,6 +165,19 @@ php artisan kafka:work --max-jobs=1
 
 > **配套阅读**：事务 Producer 见 [03 §7.5](03-Producer-发送消息.md#75-事务-producerv054)。
 
+> ⚠️ **核心警告（事务 + Consumer 必修）**：
+>
+> Kafka 事务**只在 Producer 端原子**——**Consumer 端没有事务概念**。一旦用事务 Producer，Consumer 端必须做**幂等性**，否则：
+>
+> - Producer 端事务 commit 成功 → 消息到 broker
+> - Consumer 拉到消息 → handler 处理成功
+> - Consumer 在 `KafkaJob::delete()` 提交 offset **之前**进程崩溃 / kill -9 / supervisor 重启
+> - Consumer 重启后重新 poll → **同一条事务消息会被再消费一次**
+>
+> 加上本包默认 `max_attempts=3` 重试机制，**最坏情况一条消息会被消费 3 次**。如果 handler 没有幂等性 → 业务数据重复 / 错乱。
+>
+> 解决方案见 [§9 消费端幂等性最佳实践](#9-消费端幂等性最佳实践)。
+
 事务 Producer 让生产端"全成功或全不可见"——但消费端要正确处理事务消息，需要了解 4 件事。
 
 ### 1. 核心配置：`isolation.level=read_committed`
@@ -401,6 +414,250 @@ php probe42-transaction.php
 | 失败回滚 | `abortTransaction()`（消息全不可见）| 抛异常 → 重试 / DLQ（消息已 commit 不可撤回）|
 | 消息保证 | 原子（要么全 commit 要么全 abort） | 至少一次（重试） + 业务去重（幂等）= 精确一次 |
 | 关键配置 | `producer.transactional_id` | `consumer.isolation_level` |
+
+### 9. 消费端幂等性最佳实践（v0.5.6 新增）
+
+> **业务铁律**：用了事务 Producer 之后，**所有 handler 必须做幂等性**——业务侧不保证幂等就不要用事务。
+
+#### 9.1 为什么必须幂等（消息重复的 3 个来源）
+
+```
+来源 1: Consumer 进程崩溃
+─────────────────────────
+poll 拉到消息
+   ↓
+handler 处理成功（DB 写入）
+   ↓
+❌ KafkaJob::delete() 之前进程被 kill -9
+   ↓
+Consumer 重启后, offset 没 commit → 重新 poll → 同条消息被再处理一次
+
+来源 2: 重试机制 (本包默认 max_attempts=3)
+────────────────────────────────────────
+handler 抛异常 (例: 调 RPC 5xx)
+   ↓
+框架重试 → 同条消息再进 handler
+   ↓
+如果业务没幂等 → 同一笔订单被扣库存 3 次
+
+来源 3: Producer 端事务重试 (librdkafka 内部)
+──────────────────────────────────────────
+Producer commitTransaction 失败 → librdkafka 内部重试
+   ↓
+broker 端实际只 commit 1 次, 但 producer 端 retry 期间产生了
+duplicate produce → consumer 端可能收到 2 条 (read_uncommitted 下可见)
+```
+
+**结论**：事务消息在 Consumer 端是**至少一次**语义，要达到**精确一次**必须靠业务幂等性。
+
+#### 9.2 幂等 key 设计原则
+
+幂等 key 应该是**业务主键**或**业务事件唯一标识**：
+
+| 业务场景 | 幂等 key 来源 | 例子 |
+|---|---|---|
+| 订单创建 | `order_id` | `ORD-2001` |
+| 库存扣减 | `order_id` 或 `sku + order_id` | `SKU-A:ORD-2001` |
+| 支付回调 | `payment_id` 或 `callback_id` | `PAY-88721` |
+| 邮件发送 | `email_id` | `EMAIL-1234` |
+| 用户注册 | `user_id` | `USER-1001` |
+
+> ❌ **不要**用 timestamp / random / uuid 当幂等 key（每次重试都不同，达不到去重效果）
+
+#### 9.3 三种实现方式（选适合你的）
+
+##### 方式 A：DB 唯一索引（最可靠）
+
+```sql
+-- 迁移: 幂等记录表
+CREATE TABLE kafka_idempotency (
+    idempotency_key VARCHAR(128) PRIMARY KEY,  -- 业务主键
+    topic           VARCHAR(128) NOT NULL,
+    payload         JSONB,
+    processed_at    TIMESTAMP NOT NULL DEFAULT NOW()
+);
+```
+
+```php
+// app/Jobs/ProcessOrderCreated.php
+class ProcessOrderCreated implements ShouldQueue
+{
+    public function handle(): void
+    {
+        $idempotencyKey = $this->orderData['order_id'];  // 业务主键
+
+        // 1. 尝试插入幂等记录 (UNIQUE 约束保证不重复)
+        try {
+            DB::table('kafka_idempotency')->insert([
+                'idempotency_key' => $idempotencyKey,
+                'topic'           => 'orders-events',
+                'payload'         => json_encode($this->orderData),
+                'processed_at'    => now(),
+            ]);
+        } catch (\Illuminate\Database\QueryException $e) {
+            // UNIQUE 冲突 = 已处理过, 直接跳过
+            if ($e->getCode() === '23505') {  // PostgreSQL unique violation
+                \Log::info('Duplicate order_id, skipped', ['order_id' => $idempotencyKey]);
+                return;
+            }
+            throw $e;
+        }
+
+        // 2. 真业务处理 (扣库存 / 发邮件 / ...)
+        $this->processOrder();
+    }
+}
+```
+
+**特点**：
+- ✅ 强一致（DB 事务保证）
+- ✅ 简单直接
+- ❌ 多一次 DB 写入（性能损耗 ~1-2ms）
+
+##### 方式 B：Redis SETNX（高性能）
+
+```php
+class ProcessOrderCreated implements ShouldQueue
+{
+    public function handle(): void
+    {
+        $idempotencyKey = $this->orderData['order_id'];
+        $lockKey = "kafka:idem:orders-events:{$idempotencyKey}";
+
+        // SETNX + TTL 原子操作
+        $acquired = Redis::set($lockKey, '1', 'EX', 86400, 'NX');
+        //                                              ↑ 24h TTL
+        //                                                  ↑ 只在不存在时设置
+
+        if (! $acquired) {
+            // 已存在 = 已处理过
+            \Log::info('Duplicate order_id, skipped', ['order_id' => $idempotencyKey]);
+            return;
+        }
+
+        // 业务处理
+        $this->processOrder();
+    }
+}
+```
+
+**特点**：
+- ✅ 高性能（~0.1ms）
+- ✅ 自动过期（24h TTL 不会无限增长）
+- ❌ **非强一致**（Redis 崩溃 / 切换 cluster 期间可能漏过去重）
+- ❌ 适合"非资金类"业务（订单 / 邮件 / 通知）
+- ❌ 资金类业务**必须**用方式 A（DB 唯一索引）
+
+##### 方式 C：业务表 UNIQUE 约束（最省事）
+
+如果你的业务表本身有 UNIQUE 约束（订单号 / 支付单号 / 库存批次号），**直接利用它**：
+
+```php
+// orders 表已有 UNIQUE(order_id) 约束
+public function handle(): void
+{
+    try {
+        DB::table('orders')->insert([
+            'order_id' => $this->orderData['order_id'],
+            'user_id'  => $this->orderData['user_id'],
+            'amount'   => $this->orderData['amount'],
+            'created_at' => now(),
+        ]);
+    } catch (\Illuminate\Database\QueryException $e) {
+        if ($e->getCode() === '23000' || $e->getCode() === '23505') {
+            // UNIQUE 冲突 = 重复订单, 跳过
+            \Log::info('Duplicate order, skipped', ['order_id' => $this->orderData['order_id']]);
+            return;
+        }
+        throw $e;
+    }
+}
+```
+
+**特点**：
+- ✅ 0 额外表 / 0 额外写入
+- ✅ 最简单
+- ⚠️ 业务表必须有 UNIQUE 约束（订单号 / 支付单号）
+
+#### 9.4 选型决策表
+
+| 业务重要性 | 推荐方式 | 理由 |
+|---|---|---|
+| 资金 / 订单创建 | A（DB 唯一索引）| 强一致，不允许重复 |
+| 库存扣减 | C（业务表 UNIQUE）| 库存变动表本身有 UNIQUE 约束 |
+| 邮件 / 通知 | B（Redis SETNX）| 可接受偶尔重复（用户收到 2 封邮件不算事故）|
+| 数据分析 / 埋点 | B（Redis SETNX）| 重复对结果影响小 |
+| 用户积分 / 等级 | A（DB 唯一索引）| 用户资产不能错 |
+
+#### 9.5 完整示例：事务 Producer + 幂等 Consumer 端到端
+
+```php
+// 1. Producer 端: 事务 commit
+$producer->beginTransaction();
+try {
+    $producer->send('orders-events', new Message(
+        json_encode(['order_id' => 'ORD-2001', 'user_id' => 42, 'amount' => 99]),
+        ['x-serializer' => 'json'],
+        'ORD-2001',  // partition key = order_id
+    ));
+    $producer->commitTransaction(15000);
+} catch (\Throwable $e) {
+    $producer->abortTransaction(15000);
+    throw $e;
+}
+
+// 2. Consumer 端: 幂等 handler
+class ProcessOrderCreated implements ShouldQueue
+{
+    public function __construct(public array $orderData) {}
+
+    public function handle(): void
+    {
+        // 幂等保护: 利用 orders 表 UNIQUE 约束
+        try {
+            DB::transaction(function () {
+                DB::table('orders')->insert([
+                    'order_id' => $this->orderData['order_id'],
+                    'user_id'  => $this->orderData['user_id'],
+                    'amount'   => $this->orderData['amount'],
+                    'status'   => 'created',
+                    'created_at' => now(),
+                ]);
+                DB::table('inventory')
+                    ->where('sku', $this->orderData['sku'])
+                    ->decrement('stock', $this->orderData['qty']);
+            });
+        } catch (\Illuminate\Database\QueryException $e) {
+            if (in_array($e->getCode(), ['23000', '23505'], true)) {
+                \Log::info('Duplicate order, skipped', [
+                    'order_id' => $this->orderData['order_id'],
+                ]);
+                return;  // 重复, 跳过, offset 仍 commit
+            }
+            throw $e;  // 其它错误, 重试
+        }
+
+        // 后续: 发邮件 / 通知仓库
+        event(new OrderShipped($this->orderData['order_id']));
+    }
+}
+```
+
+#### 9.6 验证幂等性的探针
+
+`laravel-test/probe44-idempotency.php`（v0.5.6+ 可选）：
+- 同一事务消息 producer 端 commit 2 次（模拟 librdkafka retry 场景）
+- consumer 端只入库 1 次（验证 UNIQUE 约束生效）
+
+#### 9.7 不做幂等性的后果（真实事故案例）
+
+> 某电商用事务 Producer 发"扣库存"事件，Consumer handler 扣库存逻辑是 `UPDATE inventory SET stock = stock - 1 WHERE sku = ?`。
+>
+> Consumer 进程在 `KafkaJob::delete()` 前被 supervisor 重启，**同一条消息被再处理**。
+>
+> 结果：1 笔订单扣了 2 次库存，超卖纠纷。
+>
+> 修法：handler 改用 `INSERT INTO inventory_changes ... ON CONFLICT (order_id) DO NOTHING`（UNIQUE 约束去重）。
 
 ---
 
