@@ -9,6 +9,7 @@ use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Worker;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
+use LaravelKafka\Console\DelayWorkCommand;
 use LaravelKafka\Console\DlqTailCommand;
 use LaravelKafka\Console\HorizonSnapshotCommand;
 use LaravelKafka\Console\ReplayCommand;
@@ -317,6 +318,7 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
                 DlqTailCommand::class,        // v0.3 Step 3
                 ReplayCommand::class,         // v0.3 Step 4
                 HorizonSnapshotCommand::class, // v0.4
+                DelayWorkCommand::class,      // v0.5.3: 时间轮延迟 worker
             ]);
         }
     }

@@ -133,14 +133,35 @@ phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.0 节
 
 ---
 
-## 长期 backlog（v0.5.1+ 考虑）
+## v0.5.3 已完成 (2026-08-27)
+
+**v0.5.0 原计划 2 项路线图功能落地**：
+
+1. **`kafka:delay:work` 时间轮延迟 worker**（`src/Console/DelayWorkCommand.php`）
+   - 监听所有 tier topic + `x-available-at` 到期 requeue 主 topic（重置 x-attempt=0）
+   - 独立 group（`--group=laravel-delay-worker`，不抢 kafka:work offset）
+   - 未到期同步等待（MVP，v0.6 评估内存队列）
+   - Fix：`buildMessage` 注入 `x-original-queue`（之前 Queue::later 传了但被忽略）
+   - 验证：probe40 7/7
+
+2. **`kafka:replay` 实际 reproduce**（`src/Replay/ReplayExecutor.php`）
+   - `offsetsForTimes` 找 from/to offset + 遍历 partition 重放（offset 上限，不依赖时间戳）
+   - 重放保留原始 key（同 key 保序）
+   - Fix：parseWindow 返回秒 vs Kafka 时间戳毫秒 → 转 ms
+   - 验证：probe41 5/5
+
+**0 regression**。phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.3 节。
+
+---
+
+## 长期 backlog（v0.6+ 考虑）
 
 ### 1. 业务方 laravel-test 项目的清理
 
 业务方测试项目 `laravel-test/` 在 `vendor/lyn-huang/laravel-kafka/` 是 git archive 快照
 + 手动 Copy-Item 同步 hotfix。**业务方业务环境** `composer require` 装会丢这些 hotfix。
 
-**修法**（v0.5.1）：
+**修法**（v0.6）：
 - 业务方 release 后跑 `composer update lyn-huang/laravel-kafka` 重打 vendor
 - 或 git clone 源码 + 手动 `cp -r src/ vendor/lyn-huang/laravel-kafka/src/`
 - README 加 "Business Testing" 章节
@@ -152,15 +173,36 @@ phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.0 节
 v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis**。v0.4.8 在 CI services
 加了 redis:7.2-alpine + health check, 但 unit test 套件还没用 Testbench 起 Redis connection.
 
-**修法**（v0.5.1）：
+**修法**（v0.6）：
 - `tests/Integration/Horizon/` 加 e2e 测试：`KafkaQueueFake` push → `kafka:work` 消费
   → 调 `recordHorizonMetrics` → 验证 Redis 写入
 - 这样 CI 也能跑 Horizon 集成（已有 Redis services）
 
 ---
 
+### 3. KafkaFake `storage()` 公开 getter（v0.5 文档承诺，未兑现）
+
+`KafkaFake::$storage` 仍 private。v0.6 加 `storage(): FakeMessageStorage` 公开访问器
+（文档 13-KafkaFake §6 曾说"v0.5 公开"）。
+
+---
+
+### 4. `kafka.handlers` per-topic handler 数组路由（v0.5 文档承诺，未兑现）
+
+`HandlerResolver` 恒返回 NativeHandler（final 类）。v0.6 让 `HandlerResolver` 支持
+数组路由（`array<string topic, HandlerInterface>`）+ 去掉 final。
+
+---
+
+### 5. 延迟 worker 内存延迟队列
+
+v0.5.3 `kafka:delay:work` 未到期消息**同步阻塞**（一条未到期阻塞 worker）。
+v0.6 加内存延迟队列（min-heap），避免阻塞 + 支持并发处理。
+
+---
+
 ## 跟踪规则
 
-1. v0.5.0 → v0.5.1：考虑把 #1 laravel-test 清理 + #2 Horizon integration test 一起做
+1. v0.5.3 → v0.6：考虑 #1 laravel-test 清理 + #2 Horizon integration test + #3 storage() + #4 per-topic + #5 延迟内存队列
 2. 每次修完从本文件删对应条目，并在 `docs/CHANGELOG.md` 新版本里写 "Fixed" 链接回本文件
-3. v0.5.0 release 后本文件**只剩 backlog**（无 high/medium 优先级）
+3. v0.5.3 release 后本文件**只剩 backlog**（无 high/medium 优先级）

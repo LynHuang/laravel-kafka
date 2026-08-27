@@ -36,17 +36,23 @@ php artisan kafka:replay \
 
 ```
 [kafka:replay] topic=orders.events window=[-1h (1700000000) → now (1700003600)] target=orders.events.replay group=replay-runner
-[kafka:replay] v0.3 MVP: window validated, actual reproduce not implemented yet (v0.4 评估)
+[kafka:replay] done: replayed 128 message(s) from 3 partition(s) to "orders.events.replay"
 ```
 
 ---
 
-## 2. v0.3 MVP 限制
+## 2. v0.5.3 实际 reproduce
 
-> **当前 v0.5.2 版本**：`kafka:replay` 只做**时间窗口解析 + 参数校验**，**不**实际 reproduce 消息
-> （`ReplayCommand.php:80` warn "actual reproduce not implemented yet"）。
+> **v0.5.3 起**：`kafka:replay` **实际 reproduce** 消息（v0.3 MVP 只做窗口解析，v0.5.3 实现）。
 
-实际 reproduce（调 `librdkafka offsetsForTimes` 找 offset，再遍历 partition 重放）在路线图 v0.6，尚未实现。
+实现（`src/Replay/ReplayExecutor.php`）：
+- `offsetsForTimes` 找每个 partition 在 `from` / `to` 时间戳对应的 offset
+- 每个 partition `assign(fromOffset)` + `consume` 遍历到 `toOffset`（用 offset 上限，不依赖 broker 时间戳）
+- `Producer::send` 重放原始 payload + headers + key 到 target-topic
+- 独立 consumer group（`--group`，不影响主消费者）
+
+> **v0.5.3 fix**：parseWindow 返回**秒**但 Kafka 时间戳是**毫秒**——已转 ms 再比较；
+> 遍历用 offset 上限 + 连续 30 次超时保护，避免死循环。
 
 ### 业务方临时方案
 
@@ -233,10 +239,8 @@ print("Replayed all messages")
 ],
 ```
 
-> **v0.5.2 修正**：`preserve_partition` 配置键存在但**无代码消费**（replay 未实现）。
-> 以下是**设计意图**，等 v0.6 reproduce 实现后生效：
-> `preserve_partition=true` 时用原 `key` 作 partition 路由键（同 key 落同 partition）；
-> `preserve_partition=false` 时 librdkafka 轮询 partition（不保序但更均衡）。
+> **v0.5.3 修正**：`kafka:replay` reproduce 已实现，重放时**保留原始 key**（`produce` 用 `$msg->key`），
+> 同 key 自动落同 partition（保序）。`preserve_partition` 配置键仍无代码消费（重放固定保留 key）。
 
 ---
 

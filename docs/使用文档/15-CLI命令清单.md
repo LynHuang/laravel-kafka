@@ -13,7 +13,7 @@
 | `kafka:replay` | 时间窗口重放 | [08-回溯Replay](08-回溯Replay.md) |
 | `kafka:horizon:snapshot` | 把 metrics 快照到 Redis | [09-Horizon适配](09-Horizon适配.md) |
 
-> 路线图 v0.6：`kafka:delay:work`（监听时间轮 tier topic）尚未发布。
+> v0.5.3 起：`kafka:delay:work`（时间轮延迟 worker）已发布，见 [06-延迟消息 §5](06-延迟消息.md#5-kafkadelayworkv053-实现)。
 
 ---
 
@@ -220,15 +220,13 @@ php artisan kafka:replay \
 
 ```
 [kafka:replay] topic=orders.events window=[-1h (1700000000) → now (1700003600)] target=orders.events.replay group=replay-runner
-[kafka:replay] v0.3 MVP: window validated, actual reproduce not implemented yet (v0.4 评估)
+[kafka:replay] done: replayed 128 message(s) from 3 partition(s) to "orders.events.replay"
 ```
 
-### v0.3 MVP 限制
+### v0.5.3 实现
 
-> 当前 v0.5.2：`kafka:replay` 只做时间窗口解析 + 参数校验，**不**实际 reproduce 消息
-> （`ReplayCommand.php:80` warn "actual reproduce not implemented yet"）。完整 reproduce 在路线图 v0.6。
->
-> 业务方临时方案见 [08-回溯Replay §2](08-回溯Replay.md#2-v03-mvp-限制)。
+> v0.5.3 起**实际 reproduce**（`offsetsForTimes` + 遍历 partition 重放，见 [08-回溯Replay §2](08-回溯Replay.md#2-v053-实际-reproduce)）。
+> v0.3 MVP 只做窗口解析，v0.5.3 补全重放。
 
 ---
 

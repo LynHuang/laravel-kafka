@@ -366,7 +366,7 @@ KAFKA_CONNECTION=analytics php artisan kafka:work --queue=laravel-jobs
 
 ## 7. 处理延迟消息（时间轮）
 
-`kafka:delay:work` 命令**尚未发布**（路线图 v0.6）。当前版本（v0.5.2）：`Queue::later()` 写到 tier topic，**需要业务方自己起 worker 监听**。详见 [06-延迟消息](06-延迟消息.md)。
+`kafka:delay:work` 命令（v0.5.3 已发布）：时间轮延迟消息 worker，监听 tier topic 到期 requeue 回主 topic。启动：`php artisan kafka:delay:work`（独立 group，不抢 kafka:work offset）。详见 [06-延迟消息 §5](06-延迟消息.md)。
 
 ---
 

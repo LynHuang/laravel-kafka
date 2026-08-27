@@ -19,11 +19,11 @@
 - **完全兼容 Laravel Queue 契约** —— `Queue::push / later / pop`，Laravel 业务代码**零改动**即可切换
 - **三种失败处理模式** —— `database` (Laravel `failed_jobs` 表) / `dlq` (独立 topic) / `hybrid` (重试入库 + 超限 DLQ)
 - **Key 路由保序** —— 同 key 落同分区，分区消费严格顺序
-- **时间轮分层延迟消息** —— 不用 broker 端定时器，topic 分层 + `Queue::later`（`kafka:delay:work` worker 在路线图 v0.6）
+- **时间轮分层延迟消息** —— 不用 broker 端定时器，topic 分层 + `Queue::later` + `kafka:delay:work` worker（v0.5.3）
 - **DLQ 高级特性** —— 异常类路由 (`ExceptionClassRouter`) + 滑动窗口限速 (`DlqRateLimiter`)
 - **批量消费** —— `pollBatch` + `commitBatch` 整批原子语义
 - **W3C Trace Context** —— 完整 `traceparent` 头，跨服务透传
-- **回溯 Replay** —— 按时间窗口重放 topic（窗口解析已实现，实际 reproduce 在路线图）
+- **回溯 Replay** —— 按时间窗口重放 topic（v0.5.3 实际 reproduce）
 - **Horizon 5.x 兼容** —— 复用 Horizon Lua 脚本，metrics 写到 `horizon:` 前缀
 - **Serializer 接入** —— 裸事件（非 Laravel Job）+ `JsonSerializer` 跨语言消费，`PayloadReceived` 事件（v0.5.0）
 - **KafkaFake 测试** —— 不用起 broker 也能断言 push 调用
@@ -205,10 +205,9 @@ php artisan kafka:work --queue=laravel-jobs
 
 候选方向（[CHANGELOG](docs/CHANGELOG.md)）：
 
-- `kafka:delay:work` worker + 业务代码接入
-- `kafka:replay` 实际 reproduce
 - KafkaFake `storage()` 公开 getter
 - `kafka.handlers` per-topic handler 数组路由
+- 延迟 worker 内存延迟队列（避免未到期消息阻塞）
 - 事务 Producer（librdkafka transactional API）
 - 应用层幂等性（idempotency key；`enable.idempotence=true` 已默认开启）
 - 多 Consumer Group Fan-out 完善
@@ -241,7 +240,7 @@ php artisan kafka:work --queue=laravel-jobs
 - `dlq` / `hybrid`：`php artisan kafka:dlq:tail laravel-jobs.dlq` 实时打印
 
 **Q4：能从历史时间点重放消息吗？**
-`php artisan kafka:replay --topic=orders.events --from=-1h --to=now --target-topic=orders.events.replay`（当前只做窗口校验 + 参数解析，**实际 reproduce 在路线图 v0.6**，临时方案见 [08-回溯Replay §2](docs/使用文档/08-回溯Replay.md)）。
+`php artisan kafka:replay --topic=orders.events --from=-1h --to=now --target-topic=orders.events.replay`（v0.5.3 起实际 reproduce，`offsetsForTimes` + 遍历 partition 重放，见 [08-回溯Replay](docs/使用文档/08-回溯Replay.md)）。
 
 **Q5：能跨语言消费吗？**
 能。两种方式：

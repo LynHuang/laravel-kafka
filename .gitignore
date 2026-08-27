@@ -55,3 +55,12 @@ LaravelKafka*.md
 
 # 文档批量修复临时脚本
 /fix_doc*.py
+
+# v0.5.3 调试探针脚本 (probe40/41 是正式测试, 保留; 调试脚本 gitignore)
+/probe3*-rdkafka*.php
+/probe40b*.php
+/probe40c*.php
+/probe41c*.php
+/probe41d*.php
+/probe41f*.php
+/probe39-rdkafka-api.php

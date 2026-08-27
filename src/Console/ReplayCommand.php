@@ -6,9 +6,10 @@ namespace LaravelKafka\Console;
 
 use Illuminate\Console\Command;
 use LaravelKafka\Replay\Replayer;
+use LaravelKafka\Replay\ReplayExecutor;
 
 /**
- * `php artisan kafka:replay` 命令（v0.3 Step 4）。
+ * `php artisan kafka:replay` 命令（v0.3 Step 4，v0.5.3 实现实际 reproduce）。
  *
  * ## 业务方使用
  *
@@ -22,11 +23,11 @@ use LaravelKafka\Replay\Replayer;
  *     --group=replay-runner
  * ```
  *
- * ## v0.3 MVP 限制
+ * ## v0.5.3 实现
  *
- * - 不实际调 librdkafka `offsetsForTimes`（留 v0.4 集成）
- * - 只做"时间窗口解析"和"参数校验"
- * - 实际 reproduce 由 `ReplayExecutor` 完成（v0.4 评估）
+ * - 时间窗口解析 + 参数校验（v0.3 已有）
+ * - **实际 reproduce**（v0.5.3 新增）：`offsetsForTimes` 找 offset → 遍历 partition
+ *   → `Producer::send` 重放到 target-topic
  */
 final class ReplayCommand extends Command
 {
@@ -45,7 +46,7 @@ final class ReplayCommand extends Command
      */
     protected $description = '把源 topic 时间窗口内的消息重新 produce 到目标 topic';
 
-    public function handle(Replayer $replayer): int
+    public function handle(Replayer $replayer, ReplayExecutor $executor): int
     {
         $topic = (string) $this->option('topic');
         $from = (string) $this->option('from');
@@ -77,7 +78,28 @@ final class ReplayCommand extends Command
             $group
         ));
 
-        $this->warn('[kafka:replay] v0.3 MVP: window validated, actual reproduce not implemented yet (v0.4 评估)');
+        // v0.5.3: 实际 reproduce
+        $config = $this->laravel->make('kafka.manager')->config();
+        try {
+            $result = $executor->execute(
+                $topic,
+                $window['from'],
+                $window['to'],
+                $targetTopic,
+                $group,
+                $config
+            );
+        } catch (\Throwable $e) {
+            $this->error('[kafka:replay] reproduce failed: ' . $e->getMessage());
+            return 1;
+        }
+
+        $this->info(sprintf(
+            '[kafka:replay] done: replayed %d message(s) from %d partition(s) to "%s"',
+            $result['replayed'],
+            $result['partitions'],
+            $targetTopic
+        ));
 
         return 0;
     }

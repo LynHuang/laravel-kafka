@@ -539,6 +539,12 @@ final class KafkaQueue extends Queue implements QueueContract
             $headers[Header::AVAILABLE_AT] = (string) ($now + ((int) $options['delay_seconds']) * 1000);
         }
 
+        // v0.5.3 fix: Queue::later() 传的 x-original-queue (延迟消息原本要回的主 topic)
+        // 之前 buildMessage 忽略, 导致 delay-5s 消息没有该 header, kafka:delay:work 无法还原主 topic.
+        if (isset($options['x-original-queue']) && $options['x-original-queue'] !== '') {
+            $headers['x-original-queue'] = (string) $options['x-original-queue'];
+        }
+
         return new Message(
             $payload,
             $headers,

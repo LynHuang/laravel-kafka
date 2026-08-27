@@ -5,6 +5,73 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.3] - 2026-08-27
+
+### Added
+
+**v0.5.0 原计划 2 项路线图功能落地**（A1 + A2）。
+
+#### 1. `kafka:delay:work` 时间轮延迟 worker（A1）
+
+新命令 `src/Console/DelayWorkCommand.php`（v0.3 设计，v0.5.3 实现）：
+
+- 监听所有 tier topic（`delay-5s, delay-30s, ...`，来自 `DelayRouter::allTopics()`）
+- 每条消息检查 `x-available-at` header：
+  - 到期（now >= avail）→ requeue 回 `x-original-queue` 主 topic，重置 `x-attempt: 0`，commit offset
+  - 未到期 → 同步等待剩余时间再 requeue（MVP 无内存队列，延迟场景吞吐要求低；worker 重启不丢消息）
+- 独立 consumer group（默认 `laravel-delay-worker`，`--group` 可改）——避免和 `kafka:work` 共享 offset
+- 容忍"Unknown topic"（code=3，tier topic 可能未创建）
+- 信号处理 + `--max-time` / `--max-jobs` / `--sleep` 选项
+
+```bash
+php artisan kafka:delay:work --max-time=3600
+```
+
+**Fix（KafkaQueue.php）**：`buildMessage` 之前忽略 `Queue::later` 传入的 `x-original-queue` option，
+导致 tier 消息缺该 header，delay:work 无法还原主 topic。v0.5.3 注入。
+
+**验证**：`laravel-test/probe40-delay-work.php` 7/7（later 写 tier → delay:work 到期 requeue 主 topic
+→ 主 topic 收到 StandardOrderJob payload）。
+
+#### 2. `kafka:replay` 实际 reproduce（A2）
+
+新执行器 `src/Replay/ReplayExecutor.php` + `ReplayCommand` 调它（v0.3 只做窗口解析）：
+
+- `offsetsForTimes` 找每个 partition 在 `from` / `to` 时间戳对应的 offset
+- 每个 partition `assign(fromOffset)` + `consume` 遍历到 `toOffset`（用 **offset 上限**，不依赖 broker 时间戳）
+- `Producer::send` 重放原始 payload + headers + key 到 target-topic（同 key 保序）
+- 独立 consumer group（`--group`，不影响主消费者）
+- 连续 30 次超时保护，防死循环
+
+```bash
+php artisan kafka:replay --topic=orders.events --from=-1h --to=now --target-topic=orders.events.replay
+```
+
+**Fix**：`TimeWindowParser` 返回**秒**但 Kafka 时间戳是**毫秒**（`msg->timestamp` 13 位）——v0.5.3
+转 ms 再比较（v0.5.2 版直接比较导致 0 条重放）。
+
+**验证**：`laravel-test/probe41-replay.php` 5/5（push 2 条 → replay → replay-test topic 收到重放消息）。
+
+### Verified
+
+| 项 | 结果 |
+| --- | --- |
+| probe40 delay:work e2e | ✅ 7/7 |
+| probe41 replay reproduce e2e | ✅ 5/5 |
+| phpunit 137 tests / 287 assertions | ✅ 0 failures |
+| phpstan level 6 analyse src | ✅ 0 errors |
+| cs-fixer fix --dry-run | ✅ 0 diff |
+
+**0 regression**。
+
+### 文档更新
+
+- 06-延迟消息 §5：`kafka:delay:work` 从"路线图 v0.6"改"v0.5.3 实现"（用法 + 选项 + supervisor）
+- 08-回溯Replay §2：`kafka:replay` 从"未实现"改"v0.5.3 实际 reproduce"
+- 04 / 15 / 16 / 根 README：同步更新 delay:work / replay 状态 + 移除路线图已实现项
+
+---
+
 ## [0.5.2] - 2026-08-27
 
 ### Fixed
