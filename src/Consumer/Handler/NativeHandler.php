@@ -116,6 +116,10 @@ final class NativeHandler implements HandlerInterface
      */
     public function handle(Message $message): HandlerResult
     {
+        // v0.4.1 hotfix: 必须在 try 块外声明 $startMs, 否则 catch 里 recordHorizonMetrics($message, $startMs, false) 触发
+        // "Undefined variable: startMs" (handle() 没声明, 只有 try/catch 后用). 重构 v0.4 时漏的变量.
+        $startMs = microtime(true);
+
         $queue = $this->container->make('kafka.manager')->connection();
         if (! $queue instanceof KafkaQueue) {
             throw new KafkaException('Default queue is not a KafkaQueue instance.');
