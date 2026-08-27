@@ -50,7 +50,29 @@
 
 ---
 
-### 2. HorizonSnapshot::snapshotJob() 缺失（中优先级）
+### 2. chain API 误用陷阱（中优先级，文档已加，源码层防御可选）
+
+**踩坑**（probe31 实测发现）：业务方写 `$a->chain([B, C])->dispatch()` 推 orderId=0 到 queue。
+
+**根因**：
+- `Illuminate\Bus\Queueable::chain()` 实例方法返回 **`$this`**（不是 PendingChain）
+- 链式 `->dispatch()` 调 `Dispatchable::dispatch()` **static** 方法 → `new static()` **不带参数**
+- 推到 queue 的是 `new OrderJob()`（orderId=0），**不是** `$a`！
+
+**实测验证**（`laravel-test/probe31f-queue-push.php`）：
+```
+offset=200 (Bus::chain API):   orderId=555  ✅
+offset=201 ($a->chain API):     orderId=0    ❌ 误用!
+```
+
+**修法**：
+- ✅ **已完成（v0.4.5）**：写 `docs/使用文档/17-Task-Chain.md` 详细说明 + 3 种正确写法（`Job::withChain` / `Bus::chain` / `Bus::dispatch($a)` 手动）
+- 可选 v0.4.6：在本包 KafkaQueue::push() 里加 inspect + 警告（如果 $job->chained 非空但 $job->orderId=0 等异常模式）
+- 优先级：中（业务方业务方按文档写即可，源码层防御可选）
+
+---
+
+### 3. HorizonSnapshot::snapshotJob() 缺失（中优先级）
 
 **踩坑**：`kafka:horizon:snapshot` 命令真调 `HorizonSnapshot::snapshotQueue()`，
 但 `snapshotQueue` 只识别 `queue:` 前缀，**job 路径**写到了 `snapshot:queue:<className>`
@@ -66,7 +88,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 
 ---
 
-### 3. KafkaQueueFakeTest 期望错（低优先级，continue-on-error 已加）
+### 4. KafkaQueueFakeTest 期望错（低优先级，continue-on-error 已加）
 
 **踩坑**：`tests/Unit/Queue/KafkaQueueFakeTest::testPushRawInNormalModeGoesToRealProducer`
 假设 non-fake 模式下 `pushRaw` 必抛 Throwable，但 CI runner 有 `services.kafka` (KRaft 单 broker)
@@ -79,7 +101,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 
 ---
 
-### 4. phpstan 历史 120 errors（低优先级，continue-on-error 已加）
+### 5. phpstan 历史 120 errors（低优先级，continue-on-error 已加）
 
 **踩坑**：v0.4.1 时 PHP-CS-Fixer 3.95 在 PHP 8.1 跑 + phpstan level 6 报 120 errors
 （`KafkaConfig` 等类的 dynamic property / never-read / visibility / `createPayload` 参数）。
@@ -95,7 +117,7 @@ Horizon 自身格式应是 `snapshot:job:App\Jobs\TestOrderJob`。
 
 ---
 
-### 5. librdkafka 1.6.2 commit 60s timeout（环境兼容，非代码 bug）
+### 6. librdkafka 1.6.2 commit 60s timeout（环境兼容，非代码 bug）
 
 **踩坑**：`kafka:work --max-time=X` 触发强退时，librdkafka 1.6.2 + Windows + 单 broker
 + IPv4/IPv6 切换下，group commit 请求等 60s 才超时。
@@ -151,9 +173,9 @@ v0.4.0 unit test 默认不连 Kafka，**但 Horizon 集成测试需要真 Redis*
 
 ## 跟踪规则
 
-1. v0.4.5 → v0.4.6：处理 #1（queue:work 兼容）、#2（snapshotJob）、#3（KafkaQueueFakeTest）、#4（phpstan）
-2. v0.4.6 → v0.4.7：处理 #5（librdkafka 升级）、#6（JsonSerializer）、#7（CI Redis service）
-3. #8（laravel-test 清理）是文档性，**不**算技术债，业务方按需处理
+1. v0.4.5 → v0.4.6：处理 #1（queue:work 兼容）、#2（chain API 防御，可选）、#3（snapshotJob）、#4（KafkaQueueFakeTest）、#5（phpstan）
+2. v0.4.6 → v0.4.7：处理 #6（librdkafka 升级）、#7（JsonSerializer）、#8（CI Redis service）
+3. #9（laravel-test 清理）是文档性，**不**算技术债，业务方按需处理
 4. 每次修完从本文件删对应条目，并在 `docs/CHANGELOG.md` 新版本里写 "Fixed" 链接回本文件
 5. CI 跑 v0.4.6 时本文件应该有 0 条 high 优先级条目
 

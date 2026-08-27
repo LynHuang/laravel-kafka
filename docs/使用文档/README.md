@@ -46,6 +46,7 @@
 | --- | --- | --- |
 | 15 | [CLI 命令清单](15-CLI命令清单.md) | 4 个命令完整参数表（`kafka:work` / `kafka:dlq:tail` / `kafka:replay` / `kafka:horizon:snapshot`） |
 | 16 | [高级主题](16-高级主题.md) | Octane 兼容、`disconnect()` 资源释放、常见错误排查 |
+| 17 | [任务链 (Task Chain)](17-Task-Chain.md) | `Bus::chain` / `Job::withChain` 实测兼容、`$a->chain()->dispatch()` 误用陷阱、强顺序与失败回滚 |
 
 ---
 
