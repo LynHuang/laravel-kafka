@@ -5,6 +5,90 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.5] - 2026-08-27
+
+### Fixed
+
+业务方按 [Laravel 8 官方队列文档](https://learnku.com/docs/laravel/8.5/queues/10395#9a07d1)
+跑标准 API 兼容性 e2e（15 项 `probe29-laravel-compat.php` + 9 项 `probe30-redis-failed-provider.php`），
+发现 2 个 P0 兼容性问题，v0.4.5 修：
+
+#### 1. `KafkaQueue::size()` 真实实现（v0.1 占位返回 0）
+
+**症状**：`Queue::size('laravel-jobs')` 永远返回 0，致 `queue:monitor` / `queue:size` 命令看不到真实队列长度。
+
+**根因**：`src/Queue/KafkaQueue.php::size()` v0.1 留 `return 0;` 占位（注释里说"v0.2+ 计划"），v0.4.4 还没做。
+
+**修法**（`src/Queue/KafkaQueue.php`）：用 `RdKafka\Consumer` + `getMetadata` + `queryWatermarkOffsets` 拿每个 partition 的 low/high，累加 `high - low` 得到物理 topic 总消息数。best-effort，异常 fallback 0。
+
+**注意**：返回的是"topic 物理消息总数"（含已消费但未删除的），不等于"未消费 lag"。Kafka 没"队列"概念，多 partition 累加。
+
+#### 2. 新增 `RedisFailedJobProvider`（Laravel 8 `queue:failed`/`queue:retry`/`queue:forget`/`queue:flush` 完全可用）
+
+**症状**：业务方业务环境无 pdo_sqlite / MySQL（只有 Redis），配 `failed.driver = 'database-uuids'` 报 SQLite driver 错误，`queue:failed` 命令无法跑。
+
+**根因**：Laravel 8 `QueueServiceProvider::registerFailedJobServices()` 只支持 `database-uuids` / `database` / `dynamodb` / `null` 4 种 driver，无 Redis-based 兜底。本包之前只有 `FailedJobHandlerInterface`（`handle()` 1 个方法），**不兼容** Laravel 标准 `FailedJobProviderInterface`（6 个方法）。
+
+**修法**：
+- **新文件** `src/Queue/Failed/RedisFailedJobProvider.php`：实现 `Illuminate\Queue\Failed\FailedJobProviderInterface` 6 个方法（`log` / `all` / `find` / `forget` / `flush` / `count`），存到 Redis sorted set + JSON hash。
+- **改** `src/LaravelKafkaServiceProvider.php`：
+  - `syncFailedTableConfig()` 加守卫：业务方配 `queue.failed.driver = 'kafka-redis'` 时不覆盖。
+  - 新增 `registerFailerOverride()`：`$this->app->extend('queue.failer', ...)` 条件覆盖，driver = 'kafka-redis' 时返回 `RedisFailedJobProvider` 实例。
+
+**业务方配置**（`config/queue.php`）：
+```php
+'failed' => [
+    'driver' => env('QUEUE_FAILED_DRIVER', 'kafka-redis'),
+    'connection' => env('QUEUE_FAILED_REDIS_CONNECTION', 'default'),
+    'list_key' => env('QUEUE_FAILED_REDIS_LIST_KEY', 'kafka:failed_jobs'),
+    'hash_prefix' => env('QUEUE_FAILED_REDIS_HASH_PREFIX', 'kafka:failed_job:'),
+    'max_items' => (int) env('QUEUE_FAILED_REDIS_MAX_ITEMS', 1000),
+],
+```
+
+**注意**：`RedisFailedJobProvider` 与本包内部 `FailedJobHandlerInterface`（`database` / `dlq` / `hybrid` 三模式）是**两条独立路径**：
+- `FailedJobHandlerInterface` 由 `kafka:work` NativeHandler 调，**写 DLQ topic**（业务方主用）。
+- `RedisFailedJobProvider` 由 Laravel `queue:failed` 命令调，**写 Redis**（业务方兼容 Laravel 标准管理命令用）。
+
+业务方同时想要 DLQ + queue:failed 兼容，两条路径并存不冲突。
+
+### Verified
+
+| 路径 | 测试 | 结果 |
+| --- | --- | --- |
+| `Queue::push` | probe29 #1 | ✅ |
+| `Queue::connection(kafka)->push` | probe29 #2 | ✅ |
+| `Job::dispatch()` | probe29 #3 | ✅ |
+| `dispatch()->onQueue()` | probe29 #4 | ✅ |
+| `dispatch()->onConnection()` | probe29 #5 | ✅ |
+| `dispatch()->delay(5)` | probe29 #6 | ✅ |
+| `dispatch(new Job)` | probe29 #7 | ✅ |
+| `Queue::later(60, $job)` | probe29 #8 | ✅ |
+| `Queue::pushRaw()` | probe29 #9 | ✅ |
+| `Queue::size('laravel-jobs')` | probe29 #10 | ✅（size=93）|
+| `Queue::connection(kafka)->size()` | probe29 #11 | ✅ |
+| `dispatch_sync()` | probe29 #12 | ✅ |
+| `queue:work --once`（Laravel 原生命令）| probe29 #13 | ✅ exit=0 |
+| `queue:failed`（Laravel 原生命令）| probe29 #14 | ✅ "No failed jobs!" |
+| `queue:monitor` | probe29 #15 | ✅ |
+| `queue.failer` 解析为 RedisFailedJobProvider | probe30 #1 | ✅ |
+| `log()` 写 Redis 成功 | probe30 #2 | ✅ |
+| `all()` 读回 uuid | probe30 #3 | ✅ |
+| `count(kafka, laravel-jobs)` 准确 | probe30 #4 | ✅ |
+| `find(uuid)` 拿单条 | probe30 #5 | ✅ |
+| `queue:failed` 命令能列出 uuid | probe30 #6 | ✅ |
+| `queue:forget {uuid}` 能删 | probe30 #7 | ✅ |
+| `forget(uuid)` 删单条 | probe30 #8 | ✅ |
+| Redis zcard 0（flush 后）| probe30 #9 | ✅ |
+
+**15/15 + 9/9 全过**。
+
+### Known Limitations（v0.4.5 仍然 NOT work 的 Laravel 8 标准 API）
+
+| API | 状态 | 备注 |
+| --- | --- | --- |
+| `queue:work` 真消费（不 --once）| ⚠️ 设计选择 | `KafkaQueue::pop()` 永远 null，本包设计用 `kafka:work` 长驻命令消费，`queue:work` 走 `pop()` 拿不到消息。业务方用 `php artisan kafka:work` 而非 `php artisan queue:work`。详见 docs/TODO.md。 |
+
 ## [0.4.4] - 2026-08-27
 
 ### Fixed

@@ -152,6 +152,7 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
 
         $this->syncFailedTableConfig();
         $this->registerFailer();
+        $this->registerFailerOverride();
         $this->registerFailedHandlerEvent();
         $this->registerCommands();
         $this->registerPublishing();
@@ -163,10 +164,18 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
      * 这样 Laravel 内置命令（`queue:failed` / `queue:retry` / `queue:flush`）能正确找到表。
      * dlq 模式不写 failed_jobs 表，跳过同步。
      *
+     * v0.4.5: 增加 `kafka-redis` driver 守卫——业务方配 `queue.failed.driver = 'kafka-redis'`
+     * 时不覆盖，让 {@see registerFailerOverride()} 接管 `queue.failer` 绑定。
+     *
      * @return void
      */
     private function syncFailedTableConfig(): void
     {
+        // v0.4.5: 业务方已配 kafka-redis 时, 不要把 driver 改回 database-uuids
+        $existingDriver = (string) config('queue.failed.driver', '');
+        if ($existingDriver === 'kafka-redis') {
+            return;
+        }
         $driver = (string) config('kafka.connections.default.failed.driver', 'hybrid');
         if ($driver === 'dlq') {
             return;
@@ -176,6 +185,37 @@ final class LaravelKafkaServiceProvider extends ServiceProvider
             (array) config('queue.failed', []),
             ['driver' => 'database-uuids', 'database' => config('kafka.connections.default.failed.database.connection'), 'table' => $table]
         )]);
+    }
+
+    /**
+     * v0.4.5: 覆盖 Laravel 默认 `queue.failer` 绑定，支持 `kafka-redis` driver。
+     *
+     * 业务方配 `queue.failed.driver = 'kafka-redis'` 时，本方法接管 `queue.failer`
+     * 解析为 {@see RedisFailedJobProvider}，让 `queue:failed` / `queue:retry` /
+     * `queue:forget` / `queue:flush` 命令在**没有 pdo_sqlite / MySQL** 的环境 work。
+     *
+     * 使用 `$this->app->extend('queue.failer', ...)` 而非 `singleton`：
+     *  - 保留 QueueServiceProvider 默认的 database-uuids fallback
+     *  - 业务方没配 kafka-redis 时走默认行为
+     *  - 只有 driver = 'kafka-redis' 时才覆盖
+     *
+     * @return void
+     */
+    private function registerFailerOverride(): void
+    {
+        $this->app->extend('queue.failer', function ($default, $app) {
+            $driver = (string) $app['config']['queue.failed.driver'] ?? '';
+            if ($driver !== 'kafka-redis') {
+                return $default;
+            }
+            $cfg = (array) ($app['config']['queue.failed'] ?? []);
+            return new \LaravelKafka\Queue\Failed\RedisFailedJobProvider(
+                (string) ($cfg['connection'] ?? 'default'),
+                (string) ($cfg['list_key'] ?? 'kafka:failed_jobs'),
+                (string) ($cfg['hash_prefix'] ?? 'kafka:failed_job:'),
+                (int) ($cfg['max_items'] ?? 1000)
+            );
+        });
     }
 
     /**

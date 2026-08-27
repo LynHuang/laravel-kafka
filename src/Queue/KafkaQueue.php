@@ -129,24 +129,55 @@ final class KafkaQueue extends Queue implements QueueContract
     }
 
     /**
-     * 拿到队列"长度"（v0.1 占位实现）。
+     * 拿到队列"长度"（v0.4.5 实现：用 queryWatermarkOffsets 算物理消息数）。
      *
-     * ## v0.1 行为
+     * ## v0.4.4 之前行为
      *
-     * 永远返回 0。Kafka 没有原生"队列长度"概念。
+     * 永远返回 0（v0.1 占位），导致 Laravel 8 `queue:size` / `queue:monitor` 等命令看不到真实长度。
      *
-     * ## v0.2+ 计划
+     * ## v0.4.5 行为
      *
-     * 接 Kafka admin API（`getOffsetPositions` / `getWatermarkOffsets`）估算 lag：
-     * - 高水位 - 已提交 offset = 未消费消息数
-     * - 给 best-effort 估算值
+     * 通过 `RdKafka\Consumer` + `queryWatermarkOffsets` 拿每个 partition 的 low/high 偏移，
+     * 累加 `high - low` 得到物理 topic 的总消息数。
      *
-     * @param string|null $queue 队列名
-     * @return int 0（v0.1）
+     * **注意**：
+     *  - 返回值是"topic 物理消息总数"（包括已消费但未删除的），不等于"未消费 lag"
+     *  - Kafka 没有"队列"概念，多个 partition 累加
+     *  - best-effort：异常 fallback 0
+     *  - 每次调用都新建一个 probe consumer（3-5s 调用频率可接受）
+     *
+     * @param string|null $queue 队列名（null = defaultTopic）
+     * @return int 物理 topic 消息总数（异常时 0）
      */
     public function size($queue = null): int
     {
-        return 0;
+        $topic = $this->resolveTopic($queue);
+
+        try {
+            $conf = new \RdKafka\Conf();
+            $conf->set('metadata.broker.list', $this->config->brokers());
+            $conf->set('socket.timeout.ms', '3000');
+            $conf->set('client.id', $this->config->clientId() . '-size-probe');
+
+            $probe = new \RdKafka\Consumer($conf);
+            $meta = $probe->getMetadata(true, null, 5000);
+
+            $total = 0;
+            foreach ($meta->getTopics() as $t) {
+                if ($t->getTopic() !== $topic) {
+                    continue;
+                }
+                foreach ($t->getPartitions() as $p) {
+                    $low = 0;
+                    $high = 0;
+                    $probe->queryWatermarkOffsets($topic, $p->getId(), $low, $high, 5000);
+                    $total += ($high - $low);
+                }
+            }
+            return $total;
+        } catch (\Throwable $e) {
+            return 0;
+        }
     }
 
     /**
