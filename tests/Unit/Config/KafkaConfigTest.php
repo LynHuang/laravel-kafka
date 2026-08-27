@@ -96,9 +96,10 @@ final class KafkaConfigTest extends TestCase
         $conf = $cfg->toProducerRdKafkaConfig();
         $this->assertSame('localhost:9092', $conf['bootstrap.servers']);
         $this->assertSame('app-1', $conf['client.id']);
-        $this->assertSame('gzip', $conf['compression']);
-        $this->assertSame('10', $conf['linger_ms']);
-        $this->assertSame('true', $conf['enable_idempotence']);
+        // v0.4.3 hotfix: 业务方友好名 -> librdkafka 原生名 (compression.type / linger.ms / enable.idempotence)
+        $this->assertSame('gzip', $conf['compression.type']);
+        $this->assertSame('10', $conf['linger.ms']);
+        $this->assertSame('true', $conf['enable.idempotence']);
     }
 
     public function testToConsumerRdKafkaConfig(): void
