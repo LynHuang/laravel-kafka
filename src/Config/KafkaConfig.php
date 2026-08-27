@@ -56,6 +56,7 @@ final class KafkaConfig
         'request_timeout_ms'   => 'request.timeout.ms',
         'message_timeout_ms'   => 'message.timeout.ms',
         'enable_idempotence'   => 'enable.idempotence',
+        'transactional_id'     => 'transactional.id', // v0.5.4 事务 Producer
         // 'acks' 已经是 librdkafka 原生名，无需翻译
     ];
 

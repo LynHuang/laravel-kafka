@@ -239,6 +239,11 @@ $producer->flush(5000);  // 等所有 in-flight 消息投递完成，最多 5s
 | `flush(int $timeoutMs = 10000): void` | 等所有 in-flight 消息投递完成 |
 | `kafka(): \RdKafka\Producer` | 拿底层 librdkafka 实例（高级扩展用） |
 | `::fromConf(\RdKafka\Conf $conf): self` | 用自定义 Conf 构造（测试用） |
+| `initTransactions(int $timeoutMs = 10000): void` | 初始化事务（v0.5.4）|
+| `beginTransaction(): void` | 开始事务（v0.5.4）|
+| `commitTransaction(int $timeoutMs = 10000): void` | 提交事务（v0.5.4）|
+| `abortTransaction(int $timeoutMs = 10000): void` | 回滚事务（v0.5.4）|
+| `isTransactional(): bool` | 是否事务模式（v0.5.4）|
 
 ### Message 值对象 API
 
@@ -257,6 +262,57 @@ $producer->flush(5000);  // 等所有 in-flight 消息投递完成，最多 5s
 ### Producer 复用
 
 `ProducerFactory::make($config)` 是**单例**（同 config 多次调用返回同一实例）。业务方不直接 `new Producer`，避免资源泄漏。
+
+---
+
+## 7.5 事务 Producer（v0.5.4）
+
+librdkafka **transactional API**：事务内多条消息原子交付（全成功或全不可见）。
+
+### 配置
+
+```php
+// config/kafka.php
+'producer' => [
+    'enable_idempotence' => true,   // 事务前提（默认已 true）
+    'acks'               => 'all',  // 事务前提（默认已 all）
+    'transactional_id'   => env('KAFKA_TRANSACTIONAL_ID', ''),
+    //  ↑ 唯一事务 id（每 producer 实例一个），空 = 不用事务
+],
+```
+
+### 用法
+
+```php
+use LaravelKafka\Producer\ProducerFactory;
+
+$producer = app(ProducerFactory::class)->make(Kafka::config('default'));
+
+$producer->initTransactions();   // 初始化事务（isTransactional() = true）
+$producer->beginTransaction();
+try {
+    $producer->send('orders', $orderMsg);
+    $producer->send('inventory', $inventoryMsg);
+    $producer->commitTransaction();   // 原子交付
+} catch (\Throwable $e) {
+    $producer->abortTransaction();    // 全部回滚
+    throw $e;
+}
+```
+
+### 关键语义
+
+- **事务模式下 `send()` 不等待 delivery report**——消息在 `commitTransaction()` 时才交付，
+  同步等 delivery report 会超时（v0.5.4 自动跳过）
+- **消费端**必须 `isolation.level = read_committed`（config 默认已配）才能看到**已提交事务**的消息；
+  aborted 事务的消息对 read_committed 不可见
+- `transactional.id` **必须唯一**（同一 id 多实例会相互踢掉）
+
+### 验证
+
+`laravel-test/probe42-transaction.php`：
+- commit 事务 send 2 条 → read_committed consumer 可见
+- abort 事务 send 1 条 → read_committed consumer **不可见**（占位 offset 但被跳过）
 
 ---
 

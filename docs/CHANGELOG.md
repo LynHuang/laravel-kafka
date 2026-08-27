@@ -5,6 +5,79 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.4] - 2026-08-28
+
+### Added
+
+**事务 Producer（librdkafka transactional API）**——v0.5.0 路线图第 3 项落地。
+
+#### `Producer` 事务方法
+
+`src/Producer/Producer.php` 新增：
+
+| 方法 | 说明 |
+| --- | --- |
+| `initTransactions(int $timeoutMs = 10000): void` | 初始化事务（成功设 `isTransactional()=true`）|
+| `beginTransaction(): void` | 开始事务 |
+| `commitTransaction(int $timeoutMs = 10000): void` | 提交事务（消息原子交付）|
+| `abortTransaction(int $timeoutMs = 10000): void` | 回滚事务（消息不交付）|
+| `isTransactional(): bool` | 是否事务模式 |
+
+**关键行为**：事务模式下 `send()` **不等待 delivery report**——事务消息在
+`commitTransaction()` 时才交付，同步等 dr_msg_cb 会 5s 超时（v0.5.4 自动跳过，直接返回 partition）。
+
+#### 配置
+
+`config/kafka.php` producer 加 `transactional_id`（`KAFKA_TRANSACTIONAL_ID`）：
+- 前提：`enable.idempotence=true` + `acks=all`（默认已配）
+- `transactional.id` 必须唯一（每 producer 实例一个）
+- `KafkaConfig::PRODUCER_KEY_MAP` 加 `transactional_id => transactional.id` 翻译
+
+```php
+'producer' => [
+    'enable_idempotence' => true,
+    'acks' => 'all',
+    'transactional_id' => env('KAFKA_TRANSACTIONAL_ID', ''),
+],
+```
+
+#### 用法
+
+```php
+$producer = app(ProducerFactory::class)->make($config);
+$producer->initTransactions();
+$producer->beginTransaction();
+try {
+    $producer->send('orders', $orderMsg);
+    $producer->send('inventory', $inventoryMsg);
+    $producer->commitTransaction();
+} catch (\Throwable $e) {
+    $producer->abortTransaction();
+    throw $e;
+}
+```
+
+**消费端**：`isolation.level=read_committed`（config 默认已配）才能看到已提交事务消息，
+aborted 事务消息不可见。
+
+### Verified
+
+| 项 | 结果 |
+| --- | --- |
+| probe42 事务 e2e | ✅ 6/7：init/begin/commit/abort 全 OK + read_committed 看到 commit 消息 + aborted 不可见（#7 对照受 broker 间歇 down 干扰）|
+| phpunit 137 tests / 287 assertions | ✅ 0 failures |
+| phpstan level 6 analyse src | ✅ 0 errors |
+| cs-fixer fix --dry-run | ✅ 0 diff |
+
+**0 regression**。
+
+### 文档更新
+
+- 03-Producer-发送消息 §7.5 事务 Producer：配置 + 用法 + 关键语义 + 验证
+- 16-高级主题升级路径：事务 Producer 标已完成（从 v0.6 路线图移除）
+
+---
+
 ## [0.5.3] - 2026-08-27
 
 ### Added

@@ -192,7 +192,7 @@ php artisan kafka:work --queue=laravel-jobs
 | ✅ `RedisFailedJobProvider` | v0.4.5：`queue:failed` / `queue:forget` / `queue:flush` 无 DB 也能用 |
 | ✅ Laravel 8 官方 API 兼容 | v0.4.5-0.4.6：`Bus::chain` / `Job::withChain` / `dispatch_sync` 等 15 项 e2e 全过 |
 
-### v0.5 — Serializer 接入 + 配置化
+### v0.5 — Serializer 接入 + 配置化 + 事务
 
 | 能力 | 说明 |
 | --- | --- |
@@ -200,6 +200,9 @@ php artisan kafka:work --queue=laravel-jobs
 | ✅ `registerSerializer()` | v0.5.0：注册自定义序列化器（avro 等）|
 | ✅ Serializer 配置化 | v0.5.1：`config/kafka.php` 的 `serializer` 项（`KAFKA_SERIALIZER`），默认 php |
 | ✅ 跨语言消费 | v0.5.0：裸事件 + `JsonSerializer`，Node/Go/Python 直接 `json.loads` |
+| ✅ `kafka:delay:work` | v0.5.3：时间轮延迟 worker（tier topic 到期 requeue 主 topic）|
+| ✅ `kafka:replay` reproduce | v0.5.3：`offsetsForTimes` + 遍历 partition 实际重放 |
+| ✅ 事务 Producer | v0.5.4：librdkafka transactional API（init/begin/commit/abort）|
 
 ### v0.6（路线图）
 
@@ -208,8 +211,7 @@ php artisan kafka:work --queue=laravel-jobs
 - KafkaFake `storage()` 公开 getter
 - `kafka.handlers` per-topic handler 数组路由
 - 延迟 worker 内存延迟队列（避免未到期消息阻塞）
-- 事务 Producer（librdkafka transactional API）
-- 应用层幂等性（idempotency key；`enable.idempotence=true` 已默认开启）
+- 应用层幂等性（idempotency key；`enable.idempotence=true` + 事务 Producer 已落地）
 - 多 Consumer Group Fan-out 完善
 - Schema Registry / Avro 集成
 - OpenTelemetry SDK 替换手写 traceparent

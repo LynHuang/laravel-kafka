@@ -64,3 +64,8 @@ LaravelKafka*.md
 /probe41d*.php
 /probe41f*.php
 /probe39-rdkafka-api.php
+
+# v0.5.4 事务调试脚本
+/probe43-txn-api.php
+/probe42b*.php
+/probe42c*.php

@@ -154,6 +154,20 @@ phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.0 节
 
 ---
 
+## v0.5.4 已完成 (2026-08-28)
+
+**事务 Producer（librdkafka transactional API）**——v0.5.0 路线图第 3 项落地：
+
+- `Producer` 加 `initTransactions` / `beginTransaction` / `commitTransaction` / `abortTransaction` / `isTransactional`
+- 事务模式下 `send()` 不等待 delivery report（消息在 commit 时交付，同步等会超时）
+- `config/kafka.php` producer 加 `transactional_id`（`KAFKA_TRANSACTIONAL_ID`）+ `PRODUCER_KEY_MAP` 翻译
+- 消费端 `isolation.level=read_committed`（默认已配）才能看到已提交事务消息
+- 验证：probe42 6/7（init/commit/abort OK + read_committed 看到 commit + aborted 不可见）
+
+**0 regression**。phpunit 137/287 + phpstan 0 + cs-fixer 0。详见 `docs/CHANGELOG.md` v0.5.4 节。
+
+---
+
 ## 长期 backlog（v0.6+ 考虑）
 
 ### 1. 业务方 laravel-test 项目的清理

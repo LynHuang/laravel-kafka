@@ -95,6 +95,12 @@ return [
                 'message_timeout_ms' => (int) env('KAFKA_PRODUCER_MESSAGE_TIMEOUT_MS', 30000),
                 'enable_idempotence' => (bool) env('KAFKA_PRODUCER_IDEMPOTENCE', true),
                 'acks'               => env('KAFKA_PRODUCER_ACKS', 'all'),
+
+                // v0.5.4 事务 Producer: 配 transactional_id 后该 producer 走事务模式
+                //  - 必须唯一 (每个 producer 实例一个), 空 = 不用事务
+                //  - 前提: enable_idempotence=true + acks=all (上面已默认)
+                //  - 用法: initTransactions -> beginTransaction -> send* -> commit/abort
+                'transactional_id'   => env('KAFKA_TRANSACTIONAL_ID', ''),
             ],
 
             /*

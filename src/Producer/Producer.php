@@ -60,6 +60,14 @@ final class Producer
     private bool $lastDeliverySucceeded = false;
 
     /**
+     * 是否事务模式（v0.5.4：librdkafka transactional API）。
+     *
+     * `initTransactions()` 成功后 true。事务模式下 `send()` 不等待 delivery report
+     * （事务消息在 `commitTransaction()` 时才交付），由 commit/abort 统一确认。
+     */
+    private bool $transactional = false;
+
+    /**
      * 用已配好 dr_msg_cb 的 Conf 构造（{@see ProducerFactory::build()} 用）。
      *
      * v0.4.1 hotfix: librdkafka 要求 `dr_msg_cb` 必须在 `new RdKafka\Producer($conf)` 之前
@@ -142,6 +150,14 @@ final class Producer
             (string) $token,
         );
 
+        // v0.5.4 事务模式: produce 后不等待 delivery report.
+        // 事务消息在 commitTransaction() 时才交付 (dr_msg_cb 在 commit 前不触发),
+        // 同步等 delivery report 会 5s 超时抛错. 返回 partition, 由 commit/abort 统一确认.
+        /** @phpstan-ignore-next-line */
+        if ($this->transactional) {
+            return $partition;
+        }
+
         // 等待 delivery report
         // v0.4.8: $this->lastDeliverySucceeded 在 callback (librdkafka 异步 dr_msg_cb) 里
         // 被设为 true, phpstan 静态分析看不到异步行为, 报 "always true" 误报.
@@ -206,6 +222,125 @@ final class Producer
     public function kafka(): RdKafkaProducer
     {
         return $this->kafka;
+    }
+
+    /**
+     * 初始化事务（v0.5.4，librdkafka transactional API）。
+     *
+     * ## 前提
+     *
+     * - config `kafka.connections.*.producer.transactional_id` 已配（唯一）
+     * - `enable.idempotence=true` + `acks=all`（config 默认）
+     * - broker 支持事务（KRaft / Kafka 0.11+）
+     *
+     * ## 使用
+     *
+     * ```php
+     * $producer = app(ProducerFactory::class)->make($config);
+     * $producer->initTransactions();
+     *
+     * $producer->beginTransaction();
+     * try {
+     *     $producer->send('topic-a', $msgA);
+     *     $producer->send('topic-b', $msgB);
+     *     $producer->commitTransaction();
+     * } catch (\Throwable $e) {
+     *     $producer->abortTransaction();
+     * }
+     * ```
+     *
+     * ## 注意
+     *
+     * - 事务模式下 `send()` 不等待 delivery report（消息在 commit 时统一交付）
+     * - 消费端必须 `isolation.level=read_committed` 才能看到已提交事务消息
+     *
+     * @param int $timeoutMs 初始化超时（默认 10s）
+     * @return void
+     * @throws KafkaException 初始化失败（transactional.id 缺失 / broker 不支持）
+     */
+    public function initTransactions(int $timeoutMs = 10000): void
+    {
+        try {
+            $this->kafka->initTransactions($timeoutMs);
+            $this->transactional = true;
+        } catch (\Throwable $e) {
+            throw new KafkaException(sprintf(
+                'Kafka initTransactions failed: %s',
+                $e->getMessage()
+            ), 0, $e);
+        }
+    }
+
+    /**
+     * 开始事务（v0.5.4）。
+     *
+     * @return void
+     * @throws KafkaException 未 initTransactions / 已在事务中
+     */
+    public function beginTransaction(): void
+    {
+        try {
+            $this->kafka->beginTransaction();
+        } catch (\Throwable $e) {
+            throw new KafkaException(sprintf(
+                'Kafka beginTransaction failed: %s',
+                $e->getMessage()
+            ), 0, $e);
+        }
+    }
+
+    /**
+     * 提交事务（v0.5.4）。
+     *
+     * 事务内所有 `send()` 的消息原子交付，`read_committed` consumer 可见。
+     *
+     * @param int $timeoutMs 提交超时（默认 10s）
+     * @return void
+     * @throws KafkaException 提交失败（应调 abortTransaction 回滚）
+     */
+    public function commitTransaction(int $timeoutMs = 10000): void
+    {
+        try {
+            $this->kafka->commitTransaction($timeoutMs);
+        } catch (\Throwable $e) {
+            throw new KafkaException(sprintf(
+                'Kafka commitTransaction failed: %s',
+                $e->getMessage()
+            ), 0, $e);
+        }
+    }
+
+    /**
+     * 回滚事务（v0.5.4）。
+     *
+     * 事务内所有 `send()` 的消息**不**交付，`read_committed` consumer 看不到。
+     *
+     * @param int $timeoutMs 回滚超时（默认 10s）
+     * @return void
+     * @throws KafkaException 回滚失败
+     */
+    public function abortTransaction(int $timeoutMs = 10000): void
+    {
+        try {
+            $this->kafka->abortTransaction($timeoutMs);
+        } catch (\Throwable $e) {
+            throw new KafkaException(sprintf(
+                'Kafka abortTransaction failed: %s',
+                $e->getMessage()
+            ), 0, $e);
+        }
+    }
+
+    /**
+     * 是否事务模式（v0.5.4）。
+     *
+     * `initTransactions()` 成功后 true；事务模式下 `send()` 不等待 delivery report。
+     *
+     * @return bool
+     */
+    public function isTransactional(): bool
+    {
+        return $this->transactional;
     }
 
     /**
