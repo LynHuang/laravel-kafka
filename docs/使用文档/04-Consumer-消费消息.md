@@ -129,7 +129,7 @@ php artisan kafka:work --max-jobs=1
 | 业务方业务方业务场景下高性能 / 低延迟（秒杀 / 抢购 / 实时数据）| ✅ `kafka:work`（必选）|
 | 业务方业务方业务场景下 batch 处理 | ✅ `kafka:work --batch-size=N` |
 
-### 业务方业务方业务场景配置
+### 业务场景配置
 
 **`kafka:work`**：在 supervisor / systemd 直接调命令（见上面 §1 典型部署）。
 
